@@ -1,0 +1,111 @@
+sources:
+
+  futures_research:
+
+    - name: Guotai Junan Futures
+      type: research_report
+      priority: high
+      categories:
+        - macro
+        - energy
+        - metals
+        - black
+        - chemical
+        - agriculture
+        - financial_futures
+
+    - name: Huatai Futures
+      type: research_report
+      priority: high
+      categories:
+        - macro
+        - energy
+        - metals
+        - chemical
+        - financial_futures
+
+    - name: Dongwu Futures
+      type: research_report
+      priority: medium
+      categories:
+        - commodity
+        - macro
+
+
+  financial_news:
+
+    - name: Reuters
+      type: news
+      priority: high
+      categories:
+        - macro
+        - energy
+        - metals
+        - geopolitics
+
+    - name: Bloomberg
+      type: news
+      priority: high
+      categories:
+        - macro
+        - commodities
+        - financial_markets
+
+    - name: Financial Times
+      type: news
+      priority: medium
+      categories:
+        - macro
+        - global_markets
+
+    - name: CLS
+      type: news
+      priority: high
+      categories:
+        - China_market
+        - macro
+        - commodities
+
+    - name: Jin10
+      type: news
+      priority: medium
+      categories:
+        - macro
+        - futures
+        - foreign_exchange
+
+
+  macro_data:
+
+    - name: Federal Reserve
+      type: official_data
+      priority: high
+      categories:
+        - interest_rates
+        - monetary_policy
+
+    - name: National Bureau of Statistics China
+      type: official_data
+      priority: high
+      categories:
+        - China_economy
+        - industrial_data
+
+    - name: EIA
+      type: official_data
+      priority: high
+      categories:
+        - crude_oil
+        - energy_inventory
+
+
+  market_data:
+
+    - name: Futures Exchange Data
+      type: market_data
+      priority: high
+      categories:
+        - futures_price
+        - volume
+        - open_interest
+
