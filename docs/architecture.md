@@ -310,3 +310,12 @@ A personal Bloomberg-style research assistant.
 Not a trading bot.
 
 A learning and decision-support system.
+## Deployment Strategy
+
+The system is designed to run on a continuously available personal machine or scheduled server.
+
+Development happens on the user's laptop.
+
+Production execution can run on a home server, desktop computer, or cloud infrastructure.
+
+The system should generate daily futures research briefs automatically without requiring manual execution.
