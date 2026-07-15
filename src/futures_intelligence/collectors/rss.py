@@ -14,11 +14,22 @@ class RSSCollector(BaseCollector):
     """Collect and normalize items from an RSS feed."""
 
     def __init__(
-        self, rss_url: str, source: str | None = None, timeout: float = 10.0
+        self,
+        rss_url: str,
+        source: str | None = None,
+        timeout: float = 10.0,
+        category: tuple[str, ...] = (),
+        commodities: tuple[str, ...] = (),
+        regions: tuple[str, ...] = (),
+        reliability_score: int = 3,
     ) -> None:
         self.rss_url = rss_url
         self.source = source
         self.timeout = timeout
+        self.category = category
+        self.commodities = commodities
+        self.regions = regions
+        self.reliability_score = reliability_score
 
     def collect(self) -> list[MarketInformation]:
         """Fetch an RSS feed and return its valid normalized items."""
@@ -37,14 +48,26 @@ class RSSCollector(BaseCollector):
         source = self.source or _text(channel.find("title")) or self.rss_url
         information: list[MarketInformation] = []
         for item in channel.findall("item"):
-            market_information = _parse_item(item, source)
+            market_information = _parse_item(
+                item,
+                source,
+                self.category,
+                self.commodities,
+                self.regions,
+                self.reliability_score,
+            )
             if market_information is not None:
                 information.append(market_information)
         return information
 
 
 def _parse_item(
-    item: ElementTree.Element, source: str
+    item: ElementTree.Element,
+    source: str,
+    category: tuple[str, ...],
+    commodities: tuple[str, ...],
+    regions: tuple[str, ...],
+    reliability_score: int,
 ) -> MarketInformation | None:
     """Convert a valid RSS item to normalized market information."""
     title = _text(item.find("title"))
@@ -61,6 +84,10 @@ def _parse_item(
             source_type="rss",
             published_time=published_time,
             content=content,
+            category=category,
+            commodities=commodities,
+            regions=regions,
+            reliability_score=reliability_score,
             url=_text(item.find("link")),
         )
     except (TypeError, ValueError):

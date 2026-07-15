@@ -16,6 +16,10 @@ class CollectorFactoryTests(unittest.TestCase):
                 "source_type": "rss",
                 "enabled": True,
                 "url": "https://example.com/feed.xml",
+                "category": ["energy"],
+                "commodities": ["crude_oil"],
+                "regions": ["United States"],
+                "reliability_score": 5,
             }
         )
 
@@ -23,6 +27,10 @@ class CollectorFactoryTests(unittest.TestCase):
         assert isinstance(collector, RSSCollector)
         self.assertEqual(collector.rss_url, "https://example.com/feed.xml")
         self.assertEqual(collector.source, "Example News")
+        self.assertEqual(collector.category, ("energy",))
+        self.assertEqual(collector.commodities, ("crude_oil",))
+        self.assertEqual(collector.regions, ("United States",))
+        self.assertEqual(collector.reliability_score, 5)
 
     def test_skips_disabled_source(self) -> None:
         collector = CollectorFactory.create(
