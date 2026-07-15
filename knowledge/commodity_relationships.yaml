@@ -1,0 +1,162 @@
+relationships:
+
+  crude_oil:
+
+    category: energy
+
+    key_drivers:
+
+      supply:
+        bullish:
+          - geopolitical_supply_risk
+          - OPEC_production_cut
+          - transportation_disruption
+
+        bearish:
+          - production_increase
+          - demand_contraction
+
+
+      inventory:
+        bullish:
+          - inventory_draw
+          - low_commercial_inventory
+
+        bearish:
+          - inventory_build
+
+
+      macro:
+        bullish:
+          - weaker_USD
+          - inflation_expectation
+
+        bearish:
+          - stronger_USD
+          - recession_expectation
+
+
+    downstream_effects:
+
+      BR:
+        mechanism:
+          - crude_cost_increase
+          - petrochemical_cost_increase
+
+        expected_bias:
+          bullish
+
+
+      styrene:
+        mechanism:
+          - crude_cost_increase
+          - naphtha_cost_increase
+
+        expected_bias:
+          bullish
+
+
+
+  BR:
+
+    category: chemical
+
+    upstream:
+
+      crude_oil:
+        relationship: cost_driver
+        direction: positive
+
+      butadiene:
+        relationship: raw_material
+        direction: positive
+
+
+    demand:
+
+      bullish:
+        - automobile_demand_increase
+        - tire_demand_increase
+
+      bearish:
+        - manufacturing_slowdown
+
+
+    inventory:
+
+      bullish:
+        - inventory_decline
+
+      bearish:
+        - inventory_accumulation
+
+
+
+  copper:
+
+    category: metals
+
+    supply:
+
+      bullish:
+        - mine_disruption
+        - Chile_supply_risk
+        - Peru_supply_risk
+
+      bearish:
+        - mine_expansion
+
+
+    demand:
+
+      bullish:
+        - AI_data_center_growth
+        - electricity_infrastructure
+        - China_manufacturing_recovery
+
+      bearish:
+        - global_growth_slowdown
+
+
+    macro:
+
+      bullish:
+        - weaker_USD
+        - lower_interest_rates
+
+
+
+  iron_ore:
+
+    category: black
+
+    supply:
+
+      bullish:
+        - Australia_export_disruption
+        - Brazil_supply_disruption
+
+      bearish:
+        - export_growth
+
+
+    demand:
+
+      bullish:
+        - China_stimulus
+        - steel_production_growth
+
+      bearish:
+        - China_property_slowdown
+
+
+    downstream:
+
+      steel:
+
+        mechanism:
+          - iron_ore_cost_change
+
+        expected_bias:
+          positive
+
