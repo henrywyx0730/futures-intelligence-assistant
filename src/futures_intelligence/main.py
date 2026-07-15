@@ -48,11 +48,16 @@ def _extract_source_configurations(value: object) -> list[dict[str, Any]]:
     if isinstance(value, dict):
         if "source_type" in value:
             return [value]
-        return [
-            source_config
-            for child in value.values()
-            for source_config in _extract_source_configurations(child)
-        ]
+
+        source_configurations: list[dict[str, Any]] = []
+        for key, child in value.items():
+            if key == "rss_sources" and isinstance(child, list):
+                source_configurations.extend(
+                    source for source in child if isinstance(source, dict)
+                )
+            else:
+                source_configurations.extend(_extract_source_configurations(child))
+        return source_configurations
     if isinstance(value, list):
         return [
             source_config
