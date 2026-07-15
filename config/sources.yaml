@@ -1,111 +1,153 @@
 sources:
+  research_reports:
+    futures_companies:
+      - name: Guotai Junan Futures
+        source_type: research_report
+        priority: high
+        enabled: true
+        url: null
+        category:
+          - macro
+          - energy
+          - metals
+          - black
+          - chemical
+          - agriculture
+          - financial_futures
+        update_frequency: daily
+        reliability_score: 5
 
-  futures_research:
+      - name: Huatai Futures
+        source_type: research_report
+        priority: high
+        enabled: true
+        url: null
+        category:
+          - macro
+          - energy
+          - metals
+          - chemical
+          - financial_futures
+        update_frequency: daily
+        reliability_score: 5
 
-    - name: Guotai Junan Futures
-      type: research_report
-      priority: high
-      categories:
-        - macro
-        - energy
-        - metals
-        - black
-        - chemical
-        - agriculture
-        - financial_futures
-
-    - name: Huatai Futures
-      type: research_report
-      priority: high
-      categories:
-        - macro
-        - energy
-        - metals
-        - chemical
-        - financial_futures
-
-    - name: Dongwu Futures
-      type: research_report
-      priority: medium
-      categories:
-        - commodity
-        - macro
-
+      - name: Dongwu Futures
+        source_type: research_report
+        priority: medium
+        enabled: true
+        url: null
+        category:
+          - commodity
+          - macro
+        update_frequency: daily
+        reliability_score: 4
 
   financial_news:
+    international_sources:
+      - name: Reuters
+        source_type: financial_news
+        priority: high
+        enabled: true
+        url: https://www.reuters.com
+        category:
+          - macro
+          - energy
+          - metals
+          - geopolitics
+        update_frequency: continuous
+        reliability_score: 5
 
-    - name: Reuters
-      type: news
-      priority: high
-      categories:
-        - macro
-        - energy
-        - metals
-        - geopolitics
+      - name: Bloomberg
+        source_type: financial_news
+        priority: high
+        enabled: true
+        url: https://www.bloomberg.com
+        category:
+          - macro
+          - commodities
+          - financial_markets
+        update_frequency: continuous
+        reliability_score: 5
 
-    - name: Bloomberg
-      type: news
-      priority: high
-      categories:
-        - macro
-        - commodities
-        - financial_markets
+      - name: Financial Times
+        source_type: financial_news
+        priority: medium
+        enabled: true
+        url: https://www.ft.com
+        category:
+          - macro
+          - global_markets
+        update_frequency: daily
+        reliability_score: 4
 
-    - name: Financial Times
-      type: news
-      priority: medium
-      categories:
-        - macro
-        - global_markets
+    domestic_sources:
+      - name: CLS
+        source_type: financial_news
+        priority: high
+        enabled: true
+        url: null
+        category:
+          - China_market
+          - macro
+          - commodities
+        update_frequency: continuous
+        reliability_score: 4
 
-    - name: CLS
-      type: news
-      priority: high
-      categories:
-        - China_market
-        - macro
-        - commodities
-
-    - name: Jin10
-      type: news
-      priority: medium
-      categories:
-        - macro
-        - futures
-        - foreign_exchange
-
+      - name: Jin10
+        source_type: financial_news
+        priority: medium
+        enabled: true
+        url: null
+        category:
+          - macro
+          - futures
+          - foreign_exchange
+        update_frequency: continuous
+        reliability_score: 4
 
   macro_data:
-
     - name: Federal Reserve
-      type: official_data
+      source_type: official_data
       priority: high
-      categories:
+      enabled: true
+      url: https://www.federalreserve.gov
+      category:
         - interest_rates
         - monetary_policy
+      update_frequency: scheduled
+      reliability_score: 5
 
     - name: National Bureau of Statistics China
-      type: official_data
+      source_type: official_data
       priority: high
-      categories:
+      enabled: true
+      url: null
+      category:
         - China_economy
         - industrial_data
+      update_frequency: scheduled
+      reliability_score: 5
 
     - name: EIA
-      type: official_data
+      source_type: official_data
       priority: high
-      categories:
+      enabled: true
+      url: https://www.eia.gov
+      category:
         - crude_oil
         - energy_inventory
-
+      update_frequency: weekly
+      reliability_score: 5
 
   market_data:
-
     - name: Futures Exchange Data
-      type: market_data
+      source_type: market_data
       priority: high
-      categories:
+      enabled: false
+      url: null
+      category:
         - futures_price
         - volume
         - open_interest
-
+      update_frequency: daily
+      reliability_score: 5
