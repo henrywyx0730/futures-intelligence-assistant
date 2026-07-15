@@ -1,0 +1,240 @@
+watchlist:
+
+  energy:
+    crude_oil:
+      name: Crude Oil
+      symbols:
+        - SC
+        - Brent
+        - WTI
+      drivers:
+        supply:
+          - OPEC production
+          - geopolitical risk
+          - transportation disruption
+          - inventory changes
+        demand:
+          - global economic growth
+          - transportation demand
+          - industrial activity
+        macro:
+          - USD
+          - interest rates
+          - inflation expectations
+
+  chemical:
+    BR:
+      name: Butadiene Rubber
+      symbols:
+        - BR
+      drivers:
+        supply:
+          - crude oil cost
+          - naphtha cost
+          - butadiene supply
+          - production capacity
+        demand:
+          - tire industry
+          - automobile demand
+          - downstream manufacturing
+        inventory:
+          - factory inventory
+          - social inventory
+
+    styrene:
+      name: Styrene
+      symbols:
+        - EB
+      drivers:
+        supply:
+          - crude oil
+          - benzene cost
+          - plant operating rate
+        demand:
+          - EPS demand
+          - ABS demand
+          - downstream manufacturing
+        inventory:
+          - port inventory
+          - factory inventory
+
+    PTA:
+      name: PTA
+      symbols:
+        - TA
+      drivers:
+        supply:
+          - PX supply
+          - refinery operation
+          - plant maintenance
+        demand:
+          - polyester demand
+          - textile industry
+        inventory:
+          - warehouse inventory
+
+  metals:
+    copper:
+      name: Copper
+      symbols:
+        - CU
+      drivers:
+        supply:
+          - mine supply
+          - Chile production
+          - Peru production
+          - smelter disruptions
+        demand:
+          - China manufacturing
+          - electricity infrastructure
+          - AI data centers
+        macro:
+          - USD
+          - interest rates
+
+    aluminum:
+      name: Aluminum
+      symbols:
+        - AL
+      drivers:
+        supply:
+          - bauxite supply
+          - alumina supply
+          - smelting capacity
+        demand:
+          - manufacturing
+          - construction
+          - renewable energy
+
+    silver:
+      name: Silver
+      symbols:
+        - AG
+      drivers:
+        supply:
+          - mine production
+        demand:
+          - industrial demand
+          - photovoltaic demand
+          - investment demand
+        macro:
+          - USD
+          - real interest rates
+
+  black:
+
+    iron_ore:
+      name: Iron Ore
+      symbols:
+        - I
+      drivers:
+        supply:
+          - Australia exports
+          - Brazil exports
+        demand:
+          - China steel demand
+          - construction
+          - infrastructure
+
+    rebar:
+      name: Rebar
+      symbols:
+        - RB
+      drivers:
+        supply:
+          - steel production
+          - steel mill profits
+        demand:
+          - real estate
+          - infrastructure
+
+    coal:
+      name: Coal
+      symbols:
+        - JM
+        - J
+      drivers:
+        supply:
+          - mine production
+          - import policy
+        demand:
+          - steel production
+          - electricity demand
+
+  agriculture:
+
+    soybean_meal:
+      name: Soybean Meal
+      symbols:
+        - M
+      drivers:
+        supply:
+          - soybean harvest
+          - weather
+          - import supply
+        demand:
+          - livestock industry
+          - feed demand
+
+    corn:
+      name: Corn
+      symbols:
+        - C
+      drivers:
+        supply:
+          - weather
+          - harvest
+          - planting area
+        demand:
+          - feed demand
+          - ethanol demand
+
+    hog:
+      name: Live Hog
+      symbols:
+        - LH
+      drivers:
+        supply:
+          - breeding capacity
+          - disease risk
+        demand:
+          - pork consumption
+
+  financial:
+
+    IF:
+      name: CSI 300 Index Futures
+      drivers:
+        macro:
+          - economic growth
+          - monetary policy
+          - market sentiment
+
+    IC:
+      name: CSI 500 Index Futures
+      drivers:
+        macro:
+          - small and medium enterprise performance
+          - liquidity
+
+    IM:
+      name: CSI 1000 Index Futures
+      drivers:
+        macro:
+          - growth expectations
+          - liquidity
+
+    T:
+      name: 10 Year Treasury Futures
+      drivers:
+        macro:
+          - interest rates
+          - monetary policy
+          - inflation expectations
+
+    TL:
+      name: 30 Year Treasury Futures
+      drivers:
+        macro:
+          - long term interest rates
+          - fiscal policy
