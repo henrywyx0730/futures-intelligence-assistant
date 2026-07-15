@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from futures_intelligence.config.loader import load_all_configurations
+from futures_intelligence.models import MarketInformation
 from futures_intelligence.pipeline.collector_runner import CollectorRunner
 from futures_intelligence.utils.logger import configure_logging
 
@@ -22,6 +23,18 @@ def main() -> None:
         "Futures Intelligence Assistant collected %d market information items.",
         len(information),
     )
+    _print_information_preview(information)
+
+
+def _print_information_preview(information: list[MarketInformation]) -> None:
+    """Print a concise preview of up to five collected information items."""
+    print(f"Collected market information: {len(information)}")
+    for item in information[:5]:
+        category = ", ".join(item.category) or "uncategorized"
+        print(
+            f"- Source: {item.source} | Title: {item.title} | "
+            f"Category: {category} | Published: {item.published_time.isoformat()}"
+        )
 
 
 def _extract_source_configurations(value: object) -> list[dict[str, Any]]:
