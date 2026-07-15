@@ -7,6 +7,7 @@ from typing import Any
 from futures_intelligence.config.loader import load_all_configurations
 from futures_intelligence.models import MarketInformation
 from futures_intelligence.pipeline.collector_runner import CollectorRunner
+from futures_intelligence.processing.deduplicator import InformationDeduplicator
 from futures_intelligence.utils.logger import configure_logging
 
 
@@ -17,10 +18,15 @@ def main() -> None:
     source_configurations = _extract_source_configurations(
         configurations["sources"]
     )
-    information = CollectorRunner(source_configurations).run()
+    collected_information = CollectorRunner(source_configurations).run()
 
     logger.info(
         "Futures Intelligence Assistant collected %d market information items.",
+        len(collected_information),
+    )
+    information = InformationDeduplicator().deduplicate(collected_information)
+    logger.info(
+        "Futures Intelligence Assistant retained %d market information items after deduplication.",
         len(information),
     )
     _print_information_preview(information)
