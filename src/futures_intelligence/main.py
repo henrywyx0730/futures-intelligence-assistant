@@ -4,21 +4,32 @@ from __future__ import annotations
 
 from typing import Any
 
+from futures_intelligence.analyst.rule_based import RuleBasedAnalyst
 from futures_intelligence.config.loader import load_all_configurations
-from futures_intelligence.models import MarketInformation
+from futures_intelligence.database import (
+    initialize_database,
+    store_market_analysis,
+    store_market_information,
+)
+from futures_intelligence.models import MarketAnalysis, MarketInformation
 from futures_intelligence.pipeline.collector_runner import CollectorRunner
 from futures_intelligence.processing.deduplicator import InformationDeduplicator
+from futures_intelligence.processing.ranker import InformationRanker
 from futures_intelligence.utils.logger import configure_logging
 
 
 def main() -> None:
     """Load configuration and run the configured collection pipeline."""
     logger = configure_logging()
+    database = initialize_database()
+    database.close()
     configurations = load_all_configurations()
     source_configurations = _extract_source_configurations(
         configurations["sources"]
     )
     collected_information = CollectorRunner(source_configurations).run()
+    for item in collected_information:
+        store_market_information("futures_intelligence.db", item)
 
     logger.info(
         "Futures Intelligence Assistant collected %d market information items.",
@@ -29,7 +40,12 @@ def main() -> None:
         "Futures Intelligence Assistant retained %d market information items after deduplication.",
         len(information),
     )
+    information = InformationRanker().rank(information)
     _print_information_preview(information)
+    analyses = RuleBasedAnalyst().analyze(information)
+    for analysis in analyses:
+        store_market_analysis("futures_intelligence.db", analysis)
+    _print_analysis_preview(analyses)
 
 
 def _print_information_preview(information: list[MarketInformation]) -> None:
@@ -40,6 +56,17 @@ def _print_information_preview(information: list[MarketInformation]) -> None:
         print(
             f"- Source: {item.source} | Title: {item.title} | "
             f"Category: {category} | Published: {item.published_time.isoformat()}"
+        )
+
+
+def _print_analysis_preview(analyses: list[MarketAnalysis]) -> None:
+    """Print a concise preview of up to five market analyses."""
+    print(f"Market analyses: {len(analyses)}")
+    for analysis in analyses[:5]:
+        information = analysis.market_information
+        print(
+            f"- Source: {information.source} | Title: {information.title} | "
+            f"Analysis: {analysis.summary}"
         )
 
 
