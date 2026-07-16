@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from email.utils import parsedate_to_datetime
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 
 from futures_intelligence.collectors.base import BaseCollector
@@ -33,7 +33,11 @@ class RSSCollector(BaseCollector):
 
     def collect(self) -> list[MarketInformation]:
         """Fetch an RSS feed and return its valid normalized items."""
-        with urlopen(self.rss_url, timeout=self.timeout) as response:
+        request = Request(
+            self.rss_url,
+            headers={"User-Agent": "FuturesIntelligenceAssistant/0.1"},
+        )
+        with urlopen(request, timeout=self.timeout) as response:
             feed_content = response.read()
 
         try:

@@ -80,6 +80,24 @@ sources:
         update_frequency: daily
         reliability_score: 4
 
+      - name: Google News Commodities
+        source_type: rss
+        priority: medium
+        enabled: true
+        url: https://news.google.com/rss/search?q=commodities+futures&hl=en-US&gl=US&ceid=US:en
+        category:
+          - commodities
+          - futures
+          - macro
+        commodities:
+          - crude_oil
+          - gold
+          - metals
+        regions:
+          - global
+        update_frequency: continuous
+        reliability_score: 3
+
     domestic_sources:
       - name: CLS
         source_type: financial_news
