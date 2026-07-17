@@ -2,52 +2,39 @@
 
 from __future__ import annotations
 
-from typing import Any
+import argparse
 
-from futures_intelligence.analyst.rule_based import RuleBasedAnalyst
-from futures_intelligence.config.loader import load_all_configurations
-from futures_intelligence.database import (
-    initialize_database,
-    store_market_analysis,
-    store_market_information,
-)
-from futures_intelligence.generator import MorningBriefGenerator
 from futures_intelligence.models import MarketAnalysis, MarketInformation
-from futures_intelligence.pipeline.collector_runner import CollectorRunner
-from futures_intelligence.processing.deduplicator import InformationDeduplicator
-from futures_intelligence.processing.ranker import InformationRanker
-from futures_intelligence.utils.logger import configure_logging
+from futures_intelligence.services import MorningBriefService
+from futures_intelligence.utils.health import HealthReport
 
 
-def main() -> None:
-    """Load configuration and run the configured collection pipeline."""
-    logger = configure_logging()
-    database = initialize_database()
-    database.close()
-    configurations = load_all_configurations()
-    source_configurations = _extract_source_configurations(
-        configurations["sources"]
-    )
-    collected_information = CollectorRunner(source_configurations).run()
-    for item in collected_information:
-        store_market_information("futures_intelligence.db", item)
+def main(argv: list[str] | None = None) -> None:
+    """Parse a command and run its CLI presentation handler."""
+    arguments = _parse_arguments(argv)
+    if arguments.command in (None, "morning-brief"):
+        _run_morning_brief()
 
-    logger.info(
-        "Futures Intelligence Assistant collected %d market information items.",
-        len(collected_information),
+
+def _parse_arguments(argv: list[str] | None) -> argparse.Namespace:
+    """Parse the current CLI command while leaving room for future commands."""
+    parser = argparse.ArgumentParser(
+        description="Futures Intelligence Assistant commands."
     )
-    information = InformationDeduplicator().deduplicate(collected_information)
-    logger.info(
-        "Futures Intelligence Assistant retained %d market information items after deduplication.",
-        len(information),
-    )
-    information = InformationRanker().rank(information)
-    _print_information_preview(information)
-    analyses = RuleBasedAnalyst().analyze(information)
-    for analysis in analyses:
-        store_market_analysis("futures_intelligence.db", analysis)
-    _print_analysis_preview(analyses)
-    print(MorningBriefGenerator().generate(analyses))
+    commands = parser.add_subparsers(dest="command")
+    commands.add_parser("morning-brief", help="Generate the morning brief.")
+    return parser.parse_args(argv)
+
+
+def _run_morning_brief() -> None:
+    """Run the morning brief application service and print CLI output."""
+    service = MorningBriefService()
+    brief = service.run()
+    _print_information_preview(service.information)
+    _print_analysis_preview(service.analyses)
+    print(brief)
+    if service.health_report is not None:
+        _print_health_status(service.health_report)
 
 
 def _print_information_preview(information: list[MarketInformation]) -> None:
@@ -72,28 +59,15 @@ def _print_analysis_preview(analyses: list[MarketAnalysis]) -> None:
         )
 
 
-def _extract_source_configurations(value: object) -> list[dict[str, Any]]:
-    """Return source-entry dictionaries from the nested source registry."""
-    if isinstance(value, dict):
-        if "source_type" in value:
-            return [value]
-
-        source_configurations: list[dict[str, Any]] = []
-        for key, child in value.items():
-            if key == "rss_sources" and isinstance(child, list):
-                source_configurations.extend(
-                    source for source in child if isinstance(source, dict)
-                )
-            else:
-                source_configurations.extend(_extract_source_configurations(child))
-        return source_configurations
-    if isinstance(value, list):
-        return [
-            source_config
-            for child in value
-            for source_config in _extract_source_configurations(child)
-        ]
-    return []
+def _print_health_status(report: HealthReport) -> None:
+    """Print the status summary persisted after a successful run."""
+    print(
+        f"Run status: {report.execution_status} | "
+        f"Collected: {report.collected_information_count} | "
+        f"Analyses: {report.generated_analysis_count} | "
+        f"Brief: {report.brief_generation_status} | "
+        f"Timestamp: {report.last_run_timestamp}"
+    )
 
 
 if __name__ == "__main__":

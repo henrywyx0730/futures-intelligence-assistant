@@ -1,0 +1,13 @@
+runtime:
+  database_path: futures_intelligence.db
+  brief:
+    lookback_hours: 24
+    output_directory: data/briefs
+  scheduler:
+    enabled: false
+    interval_hours: 24
+  logging:
+    level: INFO
+    file_path: logs/futures_intelligence.log
+  health:
+    file_path: data/health_report.json
