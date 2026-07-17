@@ -36,19 +36,30 @@ class MorningBriefGeneratorTests(unittest.TestCase):
         self.assertEqual(
             brief,
             "Morning Futures Brief\n"
-            "Number of analyses: 2\n\n"
-            "1. Source: Energy Desk\n"
-            "   Title: Oil update\n"
-            "   Summary: Oil demand remains in focus.\n\n"
-            "2. Source: Metals Desk\n"
-            "   Title: Gold update\n"
-            "   Summary: Gold prices were mixed.",
+            "Top analyses: 2 of 2\n\n"
+            "1. Oil update (Energy Desk)\n"
+            "   Oil demand remains in focus.\n\n"
+            "2. Gold update (Metals Desk)\n"
+            "   Gold prices were mixed.",
         )
+
+    def test_limits_report_to_first_five_analyses(self) -> None:
+        analyses = [
+            make_analysis(f"Update {index}", "Test Source", f"Summary {index}.")
+            for index in range(1, 7)
+        ]
+
+        brief = self.generator.generate(analyses)
+
+        self.assertIn("Top analyses: 5 of 6", brief)
+        self.assertIn("1. Update 1 (Test Source)", brief)
+        self.assertIn("5. Update 5 (Test Source)", brief)
+        self.assertNotIn("Update 6", brief)
 
     def test_generates_empty_report(self) -> None:
         self.assertEqual(
             self.generator.generate([]),
-            "Morning Futures Brief\nNumber of analyses: 0",
+            "Morning Futures Brief\nTop analyses: 0 of 0",
         )
 
 

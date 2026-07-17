@@ -4,23 +4,25 @@ from futures_intelligence.models import MarketAnalysis
 
 
 class MorningBriefGenerator:
-    """Generate a readable morning brief from market analyses."""
+    """Generate a concise morning brief from analyses ordered by relevance."""
+
+    MAX_ANALYSES = 5
 
     def generate(self, analyses: list[MarketAnalysis]) -> str:
-        """Return a deterministic text report for the supplied analyses."""
+        """Return a deterministic report containing the most relevant analyses."""
+        selected_analyses = analyses[: self.MAX_ANALYSES]
         lines = [
             "Morning Futures Brief",
-            f"Number of analyses: {len(analyses)}",
+            f"Top analyses: {len(selected_analyses)} of {len(analyses)}",
         ]
 
-        for index, analysis in enumerate(analyses, start=1):
+        for index, analysis in enumerate(selected_analyses, start=1):
             information = analysis.market_information
             lines.extend(
                 [
                     "",
-                    f"{index}. Source: {information.source}",
-                    f"   Title: {information.title}",
-                    f"   Summary: {analysis.summary}",
+                    f"{index}. {information.title} ({information.source})",
+                    f"   {analysis.summary}",
                 ]
             )
 

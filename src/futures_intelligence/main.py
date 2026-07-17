@@ -11,6 +11,7 @@ from futures_intelligence.database import (
     store_market_analysis,
     store_market_information,
 )
+from futures_intelligence.generator import MorningBriefGenerator
 from futures_intelligence.models import MarketAnalysis, MarketInformation
 from futures_intelligence.pipeline.collector_runner import CollectorRunner
 from futures_intelligence.processing.deduplicator import InformationDeduplicator
@@ -46,6 +47,7 @@ def main() -> None:
     for analysis in analyses:
         store_market_analysis("futures_intelligence.db", analysis)
     _print_analysis_preview(analyses)
+    print(MorningBriefGenerator().generate(analyses))
 
 
 def _print_information_preview(information: list[MarketInformation]) -> None:

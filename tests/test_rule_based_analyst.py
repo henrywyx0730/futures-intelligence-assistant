@@ -38,6 +38,29 @@ class RuleBasedAnalystTests(unittest.TestCase):
             "Review potential supply, demand, inventory, and cost implications.",
         )
 
+    def test_detects_crude_oil_aliases(self) -> None:
+        for alias in ("oil", "crude", "brent"):
+            with self.subTest(alias=alias):
+                analysis = self.analyst.analyze(
+                    [make_information(f"{alias} market update", "Market data")]
+                )[0]
+
+                self.assertIn("Detected commodity focus: Crude Oil.", analysis.summary)
+
+    def test_detects_gold(self) -> None:
+        analysis = self.analyst.analyze(
+            [make_information("Gold market update", "Market data")]
+        )[0]
+
+        self.assertIn("Detected commodity focus: Gold.", analysis.summary)
+
+    def test_detects_wheat(self) -> None:
+        analysis = self.analyst.analyze(
+            [make_information("Wheat market update", "Market data")]
+        )[0]
+
+        self.assertIn("Detected commodity focus: Wheat.", analysis.summary)
+
     def test_returns_general_summary_without_tracked_keywords(self) -> None:
         information = make_information(
             "Central bank statement", "The policy statement was published."

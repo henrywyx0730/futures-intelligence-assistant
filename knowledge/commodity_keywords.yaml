@@ -1,0 +1,52 @@
+commodities:
+  crude_oil:
+    label: Crude Oil
+    aliases:
+      - crude oil
+      - oil
+      - crude
+      - brent
+  butadiene_rubber:
+    label: Butadiene Rubber
+    aliases:
+      - butadiene rubber
+  styrene:
+    label: Styrene
+    aliases:
+      - styrene
+  copper:
+    label: Copper
+    aliases:
+      - copper
+  aluminum:
+    label: Aluminum
+    aliases:
+      - aluminum
+  silver:
+    label: Silver
+    aliases:
+      - silver
+  gold:
+    label: Gold
+    aliases:
+      - gold
+  iron_ore:
+    label: Iron Ore
+    aliases:
+      - iron ore
+  coal:
+    label: Coal
+    aliases:
+      - coal
+  soybean_meal:
+    label: Soybean Meal
+    aliases:
+      - soybean meal
+  corn:
+    label: Corn
+    aliases:
+      - corn
+  wheat:
+    label: Wheat
+    aliases:
+      - wheat
