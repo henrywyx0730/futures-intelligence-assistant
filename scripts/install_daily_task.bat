@@ -5,7 +5,7 @@ REM Example: scripts\install_daily_task.bat 07:30 FuturesIntelligenceMorningBrie
 setlocal
 
 set "RUN_TIME=%~1"
-if "%RUN_TIME%"=="" set "RUN_TIME=07:00"
+if "%RUN_TIME%"=="" set "RUN_TIME=08:00"
 
 set "TASK_NAME=%~2"
 if "%TASK_NAME%"=="" set "TASK_NAME=FuturesIntelligenceMorningBrief"
