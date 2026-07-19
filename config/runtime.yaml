@@ -11,3 +11,5 @@ runtime:
     file_path: logs/futures_intelligence.log
   health:
     file_path: data/health_report.json
+  history:
+    file_path: data/market_intelligence_history.json

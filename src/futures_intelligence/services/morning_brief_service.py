@@ -21,6 +21,10 @@ from futures_intelligence.processing.ranker import InformationRanker
 from futures_intelligence.utils.brief_storage import save_morning_brief
 from futures_intelligence.utils.health import HealthReport, write_health_report
 from futures_intelligence.utils.logger import configure_logging
+from futures_intelligence.utils.market_history import (
+    MarketIntelligenceHistoryEntry,
+    append_market_intelligence_history,
+)
 
 
 DEFAULT_DATABASE_PATH = "futures_intelligence.db"
@@ -30,6 +34,7 @@ DEFAULT_SCHEDULER_INTERVAL_HOURS = 24
 DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_LOG_FILE = "logs/futures_intelligence.log"
 DEFAULT_HEALTH_REPORT_FILE = "data/health_report.json"
+DEFAULT_HISTORY_FILE = "data/market_intelligence_history.json"
 
 
 @dataclass(frozen=True)
@@ -56,6 +61,13 @@ class HealthSettings:
 
 
 @dataclass(frozen=True)
+class HistorySettings:
+    """Runtime settings for local aggregated market-view history."""
+
+    file_path: str = DEFAULT_HISTORY_FILE
+
+
+@dataclass(frozen=True)
 class RuntimeConfiguration:
     """Normalized application runtime configuration with safe defaults."""
 
@@ -65,6 +77,7 @@ class RuntimeConfiguration:
     scheduler: SchedulerSettings = field(default_factory=SchedulerSettings)
     logging: LoggingSettings = field(default_factory=LoggingSettings)
     health: HealthSettings = field(default_factory=HealthSettings)
+    history: HistorySettings = field(default_factory=HistorySettings)
 
 
 class MorningBriefService:
@@ -78,6 +91,7 @@ class MorningBriefService:
         self.runtime_configuration = RuntimeConfiguration()
         self.health_report: HealthReport | None = None
         self.brief_output_path: Path | None = None
+        self.market_intelligence_history_entry: MarketIntelligenceHistoryEntry | None = None
 
     def run(self) -> str:
         """Collect, process, persist, analyze, and return a morning brief."""
@@ -124,6 +138,11 @@ class MorningBriefService:
             brief,
             self.runtime_configuration.brief_output_directory,
         )
+        self.market_intelligence_history_entry = append_market_intelligence_history(
+            self.runtime_configuration.history.file_path,
+            self.aggregated_market_view,
+            self.information,
+        )
         self.health_report = write_health_report(
             self.runtime_configuration.health.file_path,
             collected_information_count=len(collected_information),
@@ -151,6 +170,7 @@ def _runtime_configuration(value: object) -> RuntimeConfiguration:
     scheduler = value.get("scheduler")
     logging_settings = value.get("logging")
     health_settings = value.get("health")
+    history_settings = value.get("history")
 
     return RuntimeConfiguration(
         database_path=(
@@ -202,6 +222,15 @@ def _runtime_configuration(value: object) -> RuntimeConfiguration:
                 and isinstance(health_settings.get("file_path"), str)
                 and health_settings.get("file_path").strip()
                 else DEFAULT_HEALTH_REPORT_FILE
+            ),
+        ),
+        history=HistorySettings(
+            file_path=(
+                history_settings.get("file_path").strip()
+                if isinstance(history_settings, dict)
+                and isinstance(history_settings.get("file_path"), str)
+                and history_settings.get("file_path").strip()
+                else DEFAULT_HISTORY_FILE
             ),
         ),
     )

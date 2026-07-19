@@ -20,6 +20,7 @@ class MorningBriefServiceTests(unittest.TestCase):
     @patch("futures_intelligence.services.morning_brief_service.store_market_information")
     @patch("futures_intelligence.services.morning_brief_service.write_health_report")
     @patch("futures_intelligence.services.morning_brief_service.save_morning_brief")
+    @patch("futures_intelligence.services.morning_brief_service.append_market_intelligence_history")
     @patch("futures_intelligence.services.morning_brief_service.initialize_database")
     @patch("futures_intelligence.services.morning_brief_service.configure_logging")
     @patch("futures_intelligence.services.morning_brief_service.CollectorRunner")
@@ -30,6 +31,7 @@ class MorningBriefServiceTests(unittest.TestCase):
         collector_runner: Mock,
         configure_logger: Mock,
         initialize_db: Mock,
+        append_history: Mock,
         save_brief: Mock,
         write_health: Mock,
         store_information: Mock,
@@ -60,6 +62,7 @@ class MorningBriefServiceTests(unittest.TestCase):
                 "scheduler": {"enabled": True, "interval_hours": 6},
                 "logging": {"level": "DEBUG", "file_path": "logs/test.log"},
                 "health": {"file_path": "data/test-health.json"},
+                "history": {"file_path": "data/test-history.json"},
             },
         }
         collector_runner.return_value.run.return_value = [information]
@@ -67,6 +70,7 @@ class MorningBriefServiceTests(unittest.TestCase):
         initialize_db.return_value = database
         brief_output_path = Path("data/test-briefs/2026-07-17.md")
         save_brief.return_value = brief_output_path
+        append_history.return_value = Mock()
         health_report = HealthReport(
             last_run_timestamp="2026-07-17T00:00:00+00:00",
             execution_status="success",
@@ -87,6 +91,11 @@ class MorningBriefServiceTests(unittest.TestCase):
         store_information.assert_called_once_with("test-runtime.db", information)
         store_analysis.assert_called_once()
         save_brief.assert_called_once_with(brief, "data/test-briefs")
+        append_history.assert_called_once_with(
+            "data/test-history.json",
+            service.aggregated_market_view,
+            [information],
+        )
         write_health.assert_called_once_with(
             "data/test-health.json",
             collected_information_count=1,
@@ -110,6 +119,7 @@ class MorningBriefServiceTests(unittest.TestCase):
         self.assertTrue(service.runtime_configuration.scheduler.enabled)
         self.assertEqual(service.runtime_configuration.scheduler.interval_hours, 6)
         self.assertIs(service.health_report, health_report)
+        self.assertIs(service.market_intelligence_history_entry, append_history.return_value)
         configure_logger.return_value.info.assert_called()
 
     def test_uses_safe_defaults_for_missing_or_invalid_runtime_settings(self) -> None:
@@ -120,6 +130,7 @@ class MorningBriefServiceTests(unittest.TestCase):
                 "scheduler": {"enabled": "yes", "interval_hours": -1},
                 "logging": {"level": "verbose", "file_path": " "},
                 "health": {"file_path": " "},
+                "history": {"file_path": " "},
             }
         )
 
@@ -131,6 +142,9 @@ class MorningBriefServiceTests(unittest.TestCase):
         self.assertEqual(runtime.logging.level, "INFO")
         self.assertEqual(runtime.logging.file_path, "logs/futures_intelligence.log")
         self.assertEqual(runtime.health.file_path, "data/health_report.json")
+        self.assertEqual(
+            runtime.history.file_path, "data/market_intelligence_history.json"
+        )
 
 
 if __name__ == "__main__":
