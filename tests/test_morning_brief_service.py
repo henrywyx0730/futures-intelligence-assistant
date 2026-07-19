@@ -66,6 +66,13 @@ class MorningBriefServiceTests(unittest.TestCase):
                 "logging": {"level": "DEBUG", "file_path": "logs/test.log"},
                 "health": {"file_path": "data/test-health.json"},
                 "history": {"file_path": "data/test-history.json"},
+                "llm": {
+                    "enabled": True,
+                    "provider": "openai",
+                    "model": "test-model",
+                    "source_types": ["research_report"],
+                    "max_items_per_run": 2,
+                },
             },
         }
         collector_runner.return_value.run.return_value = [information]
@@ -137,6 +144,10 @@ class MorningBriefServiceTests(unittest.TestCase):
         self.assertEqual(service.brief_output_path, brief_output_path)
         self.assertTrue(service.runtime_configuration.scheduler.enabled)
         self.assertEqual(service.runtime_configuration.scheduler.interval_hours, 6)
+        self.assertTrue(service.runtime_configuration.llm.enabled)
+        self.assertEqual(service.runtime_configuration.llm.model, "test-model")
+        self.assertEqual(service.runtime_configuration.llm.source_types, ("research_report",))
+        self.assertEqual(service.runtime_configuration.llm.max_items_per_run, 2)
         self.assertIs(service.health_report, health_report)
         self.assertIs(service.market_intelligence_history_entry, append_history.return_value)
         self.assertIs(
@@ -154,6 +165,13 @@ class MorningBriefServiceTests(unittest.TestCase):
                 "logging": {"level": "verbose", "file_path": " "},
                 "health": {"file_path": " "},
                 "history": {"file_path": " "},
+                "llm": {
+                    "enabled": "yes",
+                    "provider": "other",
+                    "model": " ",
+                    "source_types": [" ", 1],
+                    "max_items_per_run": 0,
+                },
             }
         )
 
@@ -168,6 +186,11 @@ class MorningBriefServiceTests(unittest.TestCase):
         self.assertEqual(
             runtime.history.file_path, "data/market_intelligence_history.json"
         )
+        self.assertFalse(runtime.llm.enabled)
+        self.assertEqual(runtime.llm.provider, "other")
+        self.assertEqual(runtime.llm.model, "gpt-5.6-luna")
+        self.assertEqual(runtime.llm.source_types, ("research_report",))
+        self.assertEqual(runtime.llm.max_items_per_run, 5)
 
 
 if __name__ == "__main__":

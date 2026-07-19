@@ -1,7 +1,10 @@
 """Tests for deterministic analyst routing."""
 
 from datetime import datetime, timezone
+import json
+from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock
 
 from futures_intelligence.analyst import AnalystRouter, LLMAnalyst, RuleBasedAnalyst
 from futures_intelligence.models import MarketInformation
@@ -50,11 +53,66 @@ class AnalystRouterTests(unittest.TestCase):
 
         self.assertIsInstance(analyst, RuleBasedAnalyst)
 
-    def test_accepts_a_future_llm_route_override(self) -> None:
+    def test_disabled_llm_keeps_research_reports_rule_based(self) -> None:
         llm_analyst = LLMAnalyst()
-        router = AnalystRouter({"rss": llm_analyst})
+        router = AnalystRouter(
+            llm_enabled=False,
+            llm_source_types=("research_report",),
+            llm_analyst=llm_analyst,
+        )
 
-        self.assertIs(router.select_analyst(make_information("rss")), llm_analyst)
+        self.assertIsInstance(
+            router.select_analyst(make_information("research_report")), RuleBasedAnalyst
+        )
+
+    def test_enabled_llm_routes_only_configured_research_reports(self) -> None:
+        llm_analyst = LLMAnalyst()
+        router = AnalystRouter(
+            llm_enabled=True,
+            llm_source_types=("research_report",),
+            llm_analyst=llm_analyst,
+        )
+
+        self.assertIs(
+            router.select_analyst(make_information("research_report")), llm_analyst
+        )
+        for source_type in ("rss", "market_data", "official_data", "future_source"):
+            with self.subTest(source_type=source_type):
+                self.assertIsInstance(
+                    router.select_analyst(make_information(source_type)), RuleBasedAnalyst
+                )
+
+    def test_preserves_order_and_enforces_llm_limit_across_routed_items(self) -> None:
+        client = Mock()
+        client.responses.create.return_value = SimpleNamespace(
+            output_text=json.dumps(
+                {
+                    "summary": "LLM summary.",
+                    "market_direction": "neutral",
+                    "confidence_score": 25,
+                    "reasoning_details": ["Mocked response."],
+                }
+            )
+        )
+        llm_analyst = LLMAnalyst(client=client, max_items_per_run=1)
+        router = AnalystRouter(
+            llm_enabled=True,
+            llm_source_types=("research_report",),
+            llm_analyst=llm_analyst,
+        )
+        information = [
+            make_information("research_report"),
+            make_information("rss"),
+            make_information("research_report"),
+        ]
+
+        analyses = router.analyze(information)
+
+        client.responses.create.assert_called_once()
+        self.assertEqual([analysis.market_information for analysis in analyses], information)
+        self.assertEqual(analyses[0].summary, "LLM summary.")
+        self.assertIn("Detected commodity focus: Gold.", analyses[1].summary)
+        self.assertIn("Detected commodity focus: Gold.", analyses[2].summary)
 
     def test_rejects_non_market_information_values(self) -> None:
         with self.assertRaises(TypeError):

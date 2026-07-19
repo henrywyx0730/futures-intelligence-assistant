@@ -1,52 +1,143 @@
-"""Tests for the deterministic LLM analyst placeholder."""
+"""Tests for the optional OpenAI-backed analyst without network access."""
 
 from datetime import datetime, timezone
+import json
+import os
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from futures_intelligence.analyst import BaseAnalyst, LLMAnalyst
 from futures_intelligence.models import MarketInformation
 
 
-def make_information(title: str) -> MarketInformation:
-    """Create normalized information for placeholder analyst tests."""
+class FakeResponses:
+    """Record structured requests and return configured local responses."""
+
+    def __init__(self, results: list[object]) -> None:
+        self.results = results
+        self.calls: list[dict[str, object]] = []
+
+    def create(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
+        result = self.results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+class FakeClient:
+    """Expose the minimal Responses API surface used by LLMAnalyst."""
+
+    def __init__(self, results: list[object]) -> None:
+        self.responses = FakeResponses(results)
+
+
+def successful_response() -> SimpleNamespace:
+    """Return one local structured Responses API result."""
+    return SimpleNamespace(
+        output_text=json.dumps(
+            {
+                "summary": "Report points to improving gold demand.",
+                "market_direction": "bullish",
+                "confidence_score": 81,
+                "reasoning_details": ["Demand language is positive."],
+            }
+        )
+    )
+
+
+def make_information(title: str = "Gold report") -> MarketInformation:
+    """Create normalized information for LLM analyst tests."""
     return MarketInformation(
         title=title,
         source="Test Source",
-        source_type="rss",
+        source_type="research_report",
         published_time=datetime(2026, 7, 19, tzinfo=timezone.utc),
-        content="Test content.",
+        content="Gold demand improved.",
+        metadata={"report_id": "test-1"},
     )
 
 
 class LLMAnalystTests(unittest.TestCase):
-    """Validate API-free deterministic placeholder behavior."""
-
-    def setUp(self) -> None:
-        self.analyst = LLMAnalyst()
+    """Validate safe structured-output and deterministic fallback behavior."""
 
     def test_implements_base_analyst(self) -> None:
-        self.assertIsInstance(self.analyst, BaseAnalyst)
+        self.assertIsInstance(LLMAnalyst(), BaseAnalyst)
 
-    def test_returns_neutral_unavailable_analyses(self) -> None:
-        information = [make_information("First update"), make_information("Second update")]
+    def test_missing_api_key_uses_rule_based_fallback_without_network(self) -> None:
+        information = make_information()
+        with patch.dict(os.environ, {"OPENAI_API_KEY": ""}, clear=False):
+            analyses = LLMAnalyst().analyze([information])
 
-        analyses = self.analyst.analyze(information)
+        self.assertIs(analyses[0].market_information, information)
+        self.assertIn("Detected commodity focus: Gold.", analyses[0].summary)
 
-        self.assertEqual(len(analyses), 2)
-        self.assertEqual(
-            [analysis.market_information for analysis in analyses], information
-        )
-        self.assertTrue(
-            all(analysis.market_direction == "neutral" for analysis in analyses)
-        )
-        self.assertTrue(all(analysis.confidence_score == 0 for analysis in analyses))
-        self.assertTrue(all("unavailable" in analysis.summary for analysis in analyses))
+    def test_uses_mocked_structured_openai_response(self) -> None:
+        client = FakeClient([successful_response()])
+        information = make_information()
 
-    def test_is_deterministic_and_handles_empty_input(self) -> None:
-        information = [make_information("Market update")]
+        analysis = LLMAnalyst(client=client).analyze([information])[0]
 
-        self.assertEqual(self.analyst.analyze(information), self.analyst.analyze(information))
-        self.assertEqual(self.analyst.analyze([]), [])
+        self.assertIs(analysis.market_information, information)
+        self.assertEqual(analysis.summary, "Report points to improving gold demand.")
+        self.assertEqual(analysis.market_direction, "bullish")
+        self.assertEqual(analysis.confidence_score, 81)
+        self.assertEqual(analysis.reasoning_details, ("Demand language is positive.",))
+        request = client.responses.calls[0]
+        self.assertEqual(json.loads(str(request["input"])), {
+            "content": information.content,
+            "metadata": information.metadata,
+        })
+        self.assertEqual(request["tools"], [])
+        self.assertEqual(request["tool_choice"], "none")
+        self.assertFalse(request["store"])
+
+    def test_api_failure_falls_back_to_rule_based_analysis(self) -> None:
+        client = FakeClient([RuntimeError("unavailable")])
+        information = make_information()
+
+        analysis = LLMAnalyst(client=client).analyze([information])[0]
+
+        self.assertIs(analysis.market_information, information)
+        self.assertIn("Detected commodity focus: Gold.", analysis.summary)
+
+    def test_malformed_response_falls_back_to_rule_based_analysis(self) -> None:
+        malformed = SimpleNamespace(output_text='{"summary": "Missing fields"}')
+        client = FakeClient([malformed])
+        information = make_information()
+
+        analysis = LLMAnalyst(client=client).analyze([information])[0]
+
+        self.assertIs(analysis.market_information, information)
+        self.assertIn("Detected commodity focus: Gold.", analysis.summary)
+
+    def test_refusal_or_missing_output_falls_back_to_rule_based_analysis(self) -> None:
+        client = FakeClient([SimpleNamespace(output_text=None)])
+        information = make_information()
+
+        analysis = LLMAnalyst(client=client).analyze([information])[0]
+
+        self.assertIs(analysis.market_information, information)
+        self.assertIn("Detected commodity focus: Gold.", analysis.summary)
+
+    def test_enforces_max_items_and_preserves_order_and_references(self) -> None:
+        client = FakeClient([successful_response(), successful_response()])
+        information = [make_information(f"Gold report {index}") for index in range(3)]
+
+        analyses = LLMAnalyst(client=client, max_items_per_run=2).analyze(information)
+
+        self.assertEqual(len(client.responses.calls), 2)
+        self.assertEqual([analysis.market_information for analysis in analyses], information)
+        self.assertEqual(analyses[0].summary, "Report points to improving gold demand.")
+        self.assertEqual(analyses[1].summary, "Report points to improving gold demand.")
+        self.assertIn("Detected commodity focus: Gold.", analyses[2].summary)
+
+    def test_handles_empty_input_without_client_calls(self) -> None:
+        client = FakeClient([])
+
+        self.assertEqual(LLMAnalyst(client=client).analyze([]), [])
+        self.assertEqual(client.responses.calls, [])
 
 
 if __name__ == "__main__":

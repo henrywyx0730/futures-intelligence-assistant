@@ -6,8 +6,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from futures_intelligence.analyst import AggregatedMarketView, MarketAnalysisAggregator
-from futures_intelligence.analyst.rule_based import RuleBasedAnalyst
+from futures_intelligence.analyst import (
+    AggregatedMarketView,
+    AnalystRouter,
+    LLMAnalyst,
+    MarketAnalysisAggregator,
+)
 from futures_intelligence.database import (
     initialize_database,
     store_market_analysis,
@@ -39,6 +43,10 @@ DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_LOG_FILE = "logs/futures_intelligence.log"
 DEFAULT_HEALTH_REPORT_FILE = "data/health_report.json"
 DEFAULT_HISTORY_FILE = "data/market_intelligence_history.json"
+DEFAULT_LLM_PROVIDER = "openai"
+DEFAULT_LLM_MODEL = "gpt-5.6-luna"
+DEFAULT_LLM_SOURCE_TYPES = ("research_report",)
+DEFAULT_LLM_MAX_ITEMS_PER_RUN = 5
 
 
 @dataclass(frozen=True)
@@ -72,6 +80,17 @@ class HistorySettings:
 
 
 @dataclass(frozen=True)
+class LLMSettings:
+    """Optional local runtime settings for controlled LLM analysis."""
+
+    enabled: bool = False
+    provider: str = DEFAULT_LLM_PROVIDER
+    model: str = DEFAULT_LLM_MODEL
+    source_types: tuple[str, ...] = DEFAULT_LLM_SOURCE_TYPES
+    max_items_per_run: int = DEFAULT_LLM_MAX_ITEMS_PER_RUN
+
+
+@dataclass(frozen=True)
 class RuntimeConfiguration:
     """Normalized application runtime configuration with safe defaults."""
 
@@ -82,6 +101,7 @@ class RuntimeConfiguration:
     logging: LoggingSettings = field(default_factory=LoggingSettings)
     health: HealthSettings = field(default_factory=HealthSettings)
     history: HistorySettings = field(default_factory=HistorySettings)
+    llm: LLMSettings = field(default_factory=LLMSettings)
 
 
 class MorningBriefService:
@@ -130,7 +150,16 @@ class MorningBriefService:
         )
         self.information = InformationRanker().rank(information)
 
-        self.analyses = RuleBasedAnalyst().analyze(self.information)
+        llm_settings = self.runtime_configuration.llm
+        llm_analyst = LLMAnalyst(
+            model=llm_settings.model,
+            max_items_per_run=llm_settings.max_items_per_run,
+        )
+        self.analyses = AnalystRouter(
+            llm_enabled=llm_settings.enabled and llm_settings.provider == "openai",
+            llm_source_types=llm_settings.source_types,
+            llm_analyst=llm_analyst,
+        ).analyze(self.information)
         for analysis in self.analyses:
             store_market_analysis(database_path, analysis)
 
@@ -180,6 +209,7 @@ def _runtime_configuration(value: object) -> RuntimeConfiguration:
     logging_settings = value.get("logging")
     health_settings = value.get("health")
     history_settings = value.get("history")
+    llm_settings = value.get("llm")
 
     return RuntimeConfiguration(
         database_path=(
@@ -242,6 +272,39 @@ def _runtime_configuration(value: object) -> RuntimeConfiguration:
                 else DEFAULT_HISTORY_FILE
             ),
         ),
+        llm=LLMSettings(
+            enabled=(
+                llm_settings.get("enabled")
+                if isinstance(llm_settings, dict)
+                and isinstance(llm_settings.get("enabled"), bool)
+                else False
+            ),
+            provider=(
+                llm_settings.get("provider").strip().lower()
+                if isinstance(llm_settings, dict)
+                and isinstance(llm_settings.get("provider"), str)
+                and llm_settings.get("provider").strip()
+                else DEFAULT_LLM_PROVIDER
+            ),
+            model=(
+                llm_settings.get("model").strip()
+                if isinstance(llm_settings, dict)
+                and isinstance(llm_settings.get("model"), str)
+                and llm_settings.get("model").strip()
+                else DEFAULT_LLM_MODEL
+            ),
+            source_types=_llm_source_types(
+                llm_settings.get("source_types")
+                if isinstance(llm_settings, dict)
+                else None
+            ),
+            max_items_per_run=_positive_int(
+                llm_settings.get("max_items_per_run")
+                if isinstance(llm_settings, dict)
+                else None,
+                DEFAULT_LLM_MAX_ITEMS_PER_RUN,
+            ),
+        ),
     )
 
 
@@ -250,6 +313,18 @@ def _positive_int(value: object, default: int) -> int:
     if isinstance(value, int) and not isinstance(value, bool) and value > 0:
         return value
     return default
+
+
+def _llm_source_types(value: object) -> tuple[str, ...]:
+    """Return configured non-empty LLM source types in stable order."""
+    if not isinstance(value, (list, tuple)):
+        return DEFAULT_LLM_SOURCE_TYPES
+    source_types = tuple(
+        source_type.strip()
+        for source_type in value
+        if isinstance(source_type, str) and source_type.strip()
+    )
+    return source_types or DEFAULT_LLM_SOURCE_TYPES
 
 
 def _log_level(value: object) -> str:
