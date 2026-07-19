@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from futures_intelligence.analyst import BaseAnalyst, LLMAnalyst
+from futures_intelligence.analyst import BaseAnalyst, LLMAnalyst, LLMSmokeTestResult
 from futures_intelligence.models import MarketInformation
 
 
@@ -138,6 +138,63 @@ class LLMAnalystTests(unittest.TestCase):
 
         self.assertEqual(LLMAnalyst(client=client).analyze([]), [])
         self.assertEqual(client.responses.calls, [])
+
+    def test_smoke_test_returns_one_real_structured_analysis(self) -> None:
+        client = FakeClient([successful_response()])
+        information = make_information()
+
+        result = LLMAnalyst(client=client).analyze_smoke_test(information)
+
+        self.assertIsInstance(result, LLMSmokeTestResult)
+        self.assertTrue(result.success)
+        self.assertIsNotNone(result.analysis)
+        assert result.analysis is not None
+        self.assertIs(result.analysis.market_information, information)
+        self.assertEqual(len(client.responses.calls), 1)
+
+    def test_smoke_test_missing_api_key_fails_without_fallback(self) -> None:
+        information = make_information()
+        with patch.dict(os.environ, {"OPENAI_API_KEY": ""}, clear=False):
+            result = LLMAnalyst().analyze_smoke_test(information)
+
+        self.assertFalse(result.success)
+        self.assertIsNone(result.analysis)
+        self.assertIn("OPENAI_API_KEY", result.error or "")
+
+    @patch(
+        "futures_intelligence.analyst.llm._openai_client_for_smoke_test",
+        return_value=(None, "OpenAI SDK is unavailable. Install the configured dependency."),
+    )
+    def test_smoke_test_unavailable_sdk_fails_without_fallback(
+        self, smoke_client: object
+    ) -> None:
+        result = LLMAnalyst().analyze_smoke_test(make_information())
+
+        self.assertFalse(result.success)
+        self.assertIsNone(result.analysis)
+        self.assertIn("OpenAI SDK is unavailable", result.error or "")
+
+    def test_smoke_test_api_failure_is_not_reported_as_fallback_success(self) -> None:
+        client = FakeClient([RuntimeError("unavailable")])
+
+        result = LLMAnalyst(client=client).analyze_smoke_test(make_information())
+
+        self.assertFalse(result.success)
+        self.assertIsNone(result.analysis)
+        self.assertNotIn("Detected commodity", result.error or "")
+
+    def test_smoke_test_refusal_or_malformed_response_fails(self) -> None:
+        for response in (
+            SimpleNamespace(output_text=None),
+            SimpleNamespace(output_text='{"summary": "Missing fields"}'),
+        ):
+            with self.subTest(response=response.output_text):
+                result = LLMAnalyst(client=FakeClient([response])).analyze_smoke_test(
+                    make_information()
+                )
+
+                self.assertFalse(result.success)
+                self.assertIsNone(result.analysis)
 
 
 if __name__ == "__main__":

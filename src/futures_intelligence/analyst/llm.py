@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from futures_intelligence.analyst.base import BaseAnalyst
@@ -45,6 +46,15 @@ class ResponsesClient(Protocol):
     responses: Any
 
 
+@dataclass(frozen=True)
+class LLMSmokeTestResult:
+    """The explicit result of one strict, no-fallback LLM smoke-test request."""
+
+    success: bool
+    analysis: MarketAnalysis | None = None
+    error: str | None = None
+
+
 class LLMAnalyst(BaseAnalyst):
     """Use a configured OpenAI client and fall back safely on any unavailable state."""
 
@@ -84,10 +94,35 @@ class LLMAnalyst(BaseAnalyst):
                 analyses.append(analysis)
         return analyses
 
+    def analyze_smoke_test(self, item: MarketInformation) -> LLMSmokeTestResult:
+        """Run one strict LLM request and never substitute a rule-based result."""
+        if not isinstance(item, MarketInformation):
+            return LLMSmokeTestResult(
+                success=False,
+                error="Smoke-test input must be a MarketInformation instance.",
+            )
+        client = self._client
+        if client is None:
+            client, error = _openai_client_for_smoke_test()
+            if client is None:
+                return LLMSmokeTestResult(success=False, error=error)
+
+        analysis, error = self._request_analysis(client, item)
+        if analysis is None:
+            return LLMSmokeTestResult(success=False, error=error)
+        return LLMSmokeTestResult(success=True, analysis=analysis)
+
     def _analyze_item(
         self, client: ResponsesClient, item: MarketInformation
     ) -> MarketAnalysis | None:
         """Request and validate one structured local-content-only analysis."""
+        analysis, _ = self._request_analysis(client, item)
+        return analysis
+
+    def _request_analysis(
+        self, client: ResponsesClient, item: MarketInformation
+    ) -> tuple[MarketAnalysis | None, str | None]:
+        """Make one Responses API request and return an explicit validation error."""
         try:
             response = client.responses.create(
                 model=self.model,
@@ -108,9 +143,12 @@ class LLMAnalyst(BaseAnalyst):
                 tool_choice="none",
                 store=False,
             )
-            return _analysis_from_response(item, response)
         except Exception:
-            return None
+            return None, "OpenAI API request failed."
+        analysis = _analysis_from_response(item, response)
+        if analysis is None:
+            return None, "OpenAI returned no valid structured analysis."
+        return analysis, None
 
 
 def _openai_client_from_environment() -> ResponsesClient | None:
@@ -124,6 +162,21 @@ def _openai_client_from_environment() -> ResponsesClient | None:
         return OpenAI(api_key=api_key)
     except Exception:
         return None
+
+
+def _openai_client_for_smoke_test() -> tuple[ResponsesClient | None, str | None]:
+    """Create an SDK client or return a precise smoke-test failure reason."""
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return None, "OPENAI_API_KEY is not set."
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return None, "OpenAI SDK is unavailable. Install the configured dependency."
+    try:
+        return OpenAI(api_key=api_key), None
+    except Exception:
+        return None, "OpenAI SDK client initialization failed."
 
 
 def _analysis_from_response(

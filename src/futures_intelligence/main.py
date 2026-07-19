@@ -3,17 +3,32 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
+from pathlib import Path
 
+from futures_intelligence.analyst import LLMAnalyst
+from futures_intelligence.config.loader import load_all_configurations
 from futures_intelligence.models import MarketAnalysis, MarketInformation
 from futures_intelligence.services import MorningBriefService
+from futures_intelligence.services.morning_brief_service import DEFAULT_LLM_MODEL
 from futures_intelligence.utils.health import HealthReport
 
 
-def main(argv: list[str] | None = None) -> None:
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SMOKE_TEST_REPORT_PATH = (
+    PROJECT_ROOT / "data" / "research_reports" / "sample_crude_oil_outlook.txt"
+)
+
+
+def main(argv: list[str] | None = None) -> int:
     """Parse a command and run its CLI presentation handler."""
     arguments = _parse_arguments(argv)
     if arguments.command in (None, "morning-brief"):
         _run_morning_brief()
+        return 0
+    if arguments.command == "llm-smoke-test":
+        return _run_llm_smoke_test()
+    return 1
 
 
 def _parse_arguments(argv: list[str] | None) -> argparse.Namespace:
@@ -23,6 +38,10 @@ def _parse_arguments(argv: list[str] | None) -> argparse.Namespace:
     )
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("morning-brief", help="Generate the morning brief.")
+    commands.add_parser(
+        "llm-smoke-test",
+        help="Run one strict OpenAI smoke test against the local research report.",
+    )
     return parser.parse_args(argv)
 
 
@@ -35,6 +54,73 @@ def _run_morning_brief() -> None:
     print(brief)
     if service.health_report is not None:
         _print_health_status(service.health_report)
+
+
+def _run_llm_smoke_test(
+    analyst: LLMAnalyst | None = None,
+    sample_path: Path = SMOKE_TEST_REPORT_PATH,
+) -> int:
+    """Run exactly one strict LLM analysis against the fixed local sample report."""
+    try:
+        information = _load_smoke_test_information(sample_path)
+    except (OSError, ValueError) as error:
+        print(f"LLM smoke test failed: unable to read local report: {error}")
+        return 1
+
+    try:
+        model = _configured_llm_model()
+    except (FileNotFoundError, RuntimeError, ValueError) as error:
+        print(f"LLM smoke test failed: unable to load runtime configuration: {error}")
+        return 1
+
+    analyst = analyst or LLMAnalyst(model=model, max_items_per_run=1)
+    result = analyst.analyze_smoke_test(information)
+    if not result.success or result.analysis is None:
+        print(f"LLM smoke test failed: {result.error or 'no structured result returned.'}")
+        return 1
+
+    analysis = result.analysis
+    print("Real LLM smoke test succeeded: structured response received from OpenAI.")
+    print(f"Model: {model}")
+    print(f"Source Title: {analysis.market_information.title}")
+    print(f"Summary: {analysis.summary}")
+    print(f"Market Direction: {analysis.market_direction.title()}")
+    print(f"Confidence Score: {analysis.confidence_score}")
+    print("Reasoning Details:")
+    for detail in analysis.reasoning_details:
+        print(f"- {detail}")
+    return 0
+
+
+def _load_smoke_test_information(
+    sample_path: Path = SMOKE_TEST_REPORT_PATH,
+) -> MarketInformation:
+    """Load exactly one deterministic local research-report sample."""
+    content = sample_path.read_text(encoding="utf-8")
+    lines = content.splitlines()
+    title = next((line.strip() for line in lines if line.strip()), "")
+    if not title:
+        raise ValueError("research report does not contain a title")
+    return MarketInformation(
+        title=title,
+        source="Local research report smoke test",
+        source_type="research_report",
+        published_time=datetime.now(timezone.utc),
+        content=content,
+        category=("energy",),
+        commodities=("crude_oil",),
+        regions=("global",),
+        reliability_score=3,
+        metadata={"local_report_path": str(sample_path)},
+    )
+
+
+def _configured_llm_model() -> str:
+    """Return the configured OpenAI model, using the runtime safe default."""
+    runtime = load_all_configurations().get("runtime", {})
+    llm = runtime.get("llm") if isinstance(runtime, dict) else None
+    model = llm.get("model") if isinstance(llm, dict) else None
+    return model.strip() if isinstance(model, str) and model.strip() else DEFAULT_LLM_MODEL
 
 
 def _print_information_preview(information: list[MarketInformation]) -> None:
@@ -71,4 +157,4 @@ def _print_health_status(report: HealthReport) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
