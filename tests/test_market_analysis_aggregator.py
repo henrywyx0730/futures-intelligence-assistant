@@ -11,14 +11,17 @@ def make_analysis(
     direction: str,
     confidence_score: int,
     reasoning_details: tuple[str, ...],
+    source_type: str = "test",
+    reliability_score: int = 3,
 ) -> MarketAnalysis:
     """Create an analysis with the requested aggregate inputs."""
     information = MarketInformation(
         title="Market update",
         source="Test Source",
-        source_type="test",
+        source_type=source_type,
         published_time=datetime(2026, 7, 19, tzinfo=timezone.utc),
         content="Test content.",
+        reliability_score=reliability_score,
     )
     return MarketAnalysis(
         information,
@@ -67,6 +70,29 @@ class MarketAnalysisAggregatorTests(unittest.TestCase):
 
         self.assertEqual(view.overall_market_direction, "neutral")
         self.assertEqual(view.aggregated_confidence_score, 75)
+
+    def test_source_reliability_and_type_weight_directional_signals(self) -> None:
+        view = self.aggregator.aggregate(
+            [
+                make_analysis(
+                    "bullish",
+                    90,
+                    ("Lower-weight RSS signal.",),
+                    source_type="rss",
+                    reliability_score=1,
+                ),
+                make_analysis(
+                    "bearish",
+                    70,
+                    ("Higher-weight official-data signal.",),
+                    source_type="official_data",
+                    reliability_score=5,
+                ),
+            ]
+        )
+
+        self.assertEqual(view.overall_market_direction, "bearish")
+        self.assertEqual(view.aggregated_confidence_score, 72)
 
     def test_returns_empty_neutral_view(self) -> None:
         view = self.aggregator.aggregate([])

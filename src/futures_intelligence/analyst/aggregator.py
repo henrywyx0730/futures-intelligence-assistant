@@ -7,6 +7,14 @@ from dataclasses import dataclass
 from futures_intelligence.models import MarketAnalysis
 
 
+SOURCE_TYPE_WEIGHTS = {
+    "official_data": 120,
+    "research_report": 110,
+    "market_data": 100,
+    "rss": 80,
+}
+
+
 @dataclass(frozen=True)
 class AggregatedMarketView:
     """A combined directional view derived from individual analyses."""
@@ -32,23 +40,25 @@ class MarketAnalysisAggregator:
             )
 
         bullish_weight = sum(
-            analysis.confidence_score
+            _signal_weight(analysis)
             for analysis in analyses
             if analysis.market_direction == "bullish"
         )
         bearish_weight = sum(
-            analysis.confidence_score
+            _signal_weight(analysis)
             for analysis in analyses
             if analysis.market_direction == "bearish"
         )
+        source_weights = [_source_weight(analysis) for analysis in analyses]
         return AggregatedMarketView(
             overall_market_direction=_overall_direction(
                 bullish_weight, bearish_weight
             ),
             aggregated_confidence_score=sum(
-                analysis.confidence_score for analysis in analyses
+                analysis.confidence_score * source_weight
+                for analysis, source_weight in zip(analyses, source_weights)
             )
-            // len(analyses),
+            // sum(source_weights),
             reasoning_details=_combined_reasoning_details(analyses),
             analysis_count=len(analyses),
         )
@@ -67,6 +77,20 @@ def _overall_direction(bullish_weight: int, bearish_weight: int) -> str:
     if bearish_weight > bullish_weight:
         return "bearish"
     return "neutral"
+
+
+def _signal_weight(analysis: MarketAnalysis) -> int:
+    """Return confidence weighted by the underlying source's reliability and type."""
+    return analysis.confidence_score * _source_weight(analysis)
+
+
+def _source_weight(analysis: MarketAnalysis) -> int:
+    """Return an integer source weight using reliability and source-type metadata."""
+    information = analysis.market_information
+    source_type_weight = SOURCE_TYPE_WEIGHTS.get(
+        information.source_type.lower(), 100
+    )
+    return information.reliability_score * source_type_weight
 
 
 def _combined_reasoning_details(
