@@ -5,6 +5,7 @@ from futures_intelligence.analyst import (
     MarketAnalysisAggregator,
 )
 from futures_intelligence.models import MarketAnalysis
+from futures_intelligence.processing import MarketTrendChange
 
 
 class MorningBriefGenerator:
@@ -16,6 +17,7 @@ class MorningBriefGenerator:
         self,
         analyses: list[MarketAnalysis],
         market_view: AggregatedMarketView | None = None,
+        trend_change: MarketTrendChange | None = None,
     ) -> str:
         """Return a deterministic report containing the most relevant analyses."""
         selected_analyses = analyses[: self.MAX_ANALYSES]
@@ -32,6 +34,19 @@ class MorningBriefGenerator:
             lines.extend(f"- {detail}" for detail in market_view.reasoning_details)
         else:
             lines.append("- No reasoning details available.")
+        if _has_comparable_trend_change(trend_change):
+            assert trend_change is not None
+            assert trend_change.previous_direction is not None
+            assert trend_change.latest_direction is not None
+            lines.extend(
+                [
+                    "",
+                    "Trend Change",
+                    f"Previous Direction: {trend_change.previous_direction.title()}",
+                    f"Current Direction: {trend_change.latest_direction.title()}",
+                    f"Confidence Change: {trend_change.confidence_change:+d} points",
+                ]
+            )
         lines.extend(
             [
                 "",
@@ -50,3 +65,12 @@ class MorningBriefGenerator:
             )
 
         return "\n".join(lines)
+
+
+def _has_comparable_trend_change(trend_change: MarketTrendChange | None) -> bool:
+    """Return whether a trend change contains both historical directions."""
+    return (
+        trend_change is not None
+        and trend_change.previous_direction is not None
+        and trend_change.latest_direction is not None
+    )

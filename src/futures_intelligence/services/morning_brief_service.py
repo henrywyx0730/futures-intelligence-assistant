@@ -18,6 +18,10 @@ from futures_intelligence.models import MarketAnalysis, MarketInformation
 from futures_intelligence.pipeline.collector_runner import CollectorRunner
 from futures_intelligence.processing.deduplicator import InformationDeduplicator
 from futures_intelligence.processing.ranker import InformationRanker
+from futures_intelligence.processing.trend_detector import (
+    MarketTrendChange,
+    MarketTrendChangeDetector,
+)
 from futures_intelligence.utils.brief_storage import save_morning_brief
 from futures_intelligence.utils.health import HealthReport, write_health_report
 from futures_intelligence.utils.logger import configure_logging
@@ -92,6 +96,7 @@ class MorningBriefService:
         self.health_report: HealthReport | None = None
         self.brief_output_path: Path | None = None
         self.market_intelligence_history_entry: MarketIntelligenceHistoryEntry | None = None
+        self.market_trend_change: MarketTrendChange | None = None
 
     def run(self) -> str:
         """Collect, process, persist, analyze, and return a morning brief."""
@@ -130,9 +135,13 @@ class MorningBriefService:
             store_market_analysis(database_path, analysis)
 
         self.aggregated_market_view = MarketAnalysisAggregator().aggregate(self.analyses)
+        self.market_trend_change = MarketTrendChangeDetector().detect(
+            self.runtime_configuration.history.file_path
+        )
         brief = MorningBriefGenerator().generate(
             self.analyses,
             self.aggregated_market_view,
+            self.market_trend_change,
         )
         self.brief_output_path = save_morning_brief(
             brief,

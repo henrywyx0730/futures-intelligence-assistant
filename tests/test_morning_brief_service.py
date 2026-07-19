@@ -10,6 +10,7 @@ from futures_intelligence.services.morning_brief_service import (
     MorningBriefService,
     _runtime_configuration,
 )
+from futures_intelligence.processing import MarketTrendChange
 from futures_intelligence.utils.health import HealthReport
 
 
@@ -21,6 +22,7 @@ class MorningBriefServiceTests(unittest.TestCase):
     @patch("futures_intelligence.services.morning_brief_service.write_health_report")
     @patch("futures_intelligence.services.morning_brief_service.save_morning_brief")
     @patch("futures_intelligence.services.morning_brief_service.append_market_intelligence_history")
+    @patch("futures_intelligence.services.morning_brief_service.MarketTrendChangeDetector")
     @patch("futures_intelligence.services.morning_brief_service.initialize_database")
     @patch("futures_intelligence.services.morning_brief_service.configure_logging")
     @patch("futures_intelligence.services.morning_brief_service.CollectorRunner")
@@ -31,6 +33,7 @@ class MorningBriefServiceTests(unittest.TestCase):
         collector_runner: Mock,
         configure_logger: Mock,
         initialize_db: Mock,
+        trend_detector: Mock,
         append_history: Mock,
         save_brief: Mock,
         write_health: Mock,
@@ -71,6 +74,17 @@ class MorningBriefServiceTests(unittest.TestCase):
         brief_output_path = Path("data/test-briefs/2026-07-17.md")
         save_brief.return_value = brief_output_path
         append_history.return_value = Mock()
+        trend_detector.return_value.detect.return_value = MarketTrendChange(
+            previous_date="2026-07-16",
+            latest_date="2026-07-17",
+            previous_direction="neutral",
+            latest_direction="bullish",
+            direction_changed=True,
+            previous_confidence_score=50,
+            latest_confidence_score=67,
+            confidence_change=17,
+            confidence_changed=True,
+        )
         health_report = HealthReport(
             last_run_timestamp="2026-07-17T00:00:00+00:00",
             execution_status="success",
@@ -96,6 +110,7 @@ class MorningBriefServiceTests(unittest.TestCase):
             service.aggregated_market_view,
             [information],
         )
+        trend_detector.return_value.detect.assert_called_once_with("data/test-history.json")
         write_health.assert_called_once_with(
             "data/test-health.json",
             collected_information_count=1,
@@ -104,6 +119,10 @@ class MorningBriefServiceTests(unittest.TestCase):
         )
         self.assertIn("Morning Futures Brief", brief)
         self.assertIn("Gold market update (Test Source)", brief)
+        self.assertIn("Trend Change", brief)
+        self.assertIn("Previous Direction: Neutral", brief)
+        self.assertIn("Current Direction: Bullish", brief)
+        self.assertIn("Confidence Change: +17 points", brief)
         self.assertEqual(service.information, [information])
         self.assertEqual(len(service.analyses), 1)
         self.assertIs(service.analyses[0].market_information, information)
@@ -120,6 +139,10 @@ class MorningBriefServiceTests(unittest.TestCase):
         self.assertEqual(service.runtime_configuration.scheduler.interval_hours, 6)
         self.assertIs(service.health_report, health_report)
         self.assertIs(service.market_intelligence_history_entry, append_history.return_value)
+        self.assertIs(
+            service.market_trend_change,
+            trend_detector.return_value.detect.return_value,
+        )
         configure_logger.return_value.info.assert_called()
 
     def test_uses_safe_defaults_for_missing_or_invalid_runtime_settings(self) -> None:

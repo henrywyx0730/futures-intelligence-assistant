@@ -6,6 +6,7 @@ import unittest
 from futures_intelligence.analyst import AggregatedMarketView
 from futures_intelligence.generator import MorningBriefGenerator
 from futures_intelligence.models import MarketAnalysis, MarketInformation
+from futures_intelligence.processing import MarketTrendChange
 
 
 def make_analysis(title: str, source: str, summary: str) -> MarketAnalysis:
@@ -82,6 +83,43 @@ class MorningBriefGeneratorTests(unittest.TestCase):
         self.assertIn("- Positive price momentum.", brief)
         self.assertIn("- Demand improved.", brief)
         self.assertIn("1. Oil update (Energy Desk)", brief)
+
+    def test_includes_comparable_trend_change(self) -> None:
+        trend_change = MarketTrendChange(
+            previous_date="2026-07-18",
+            latest_date="2026-07-19",
+            previous_direction="bullish",
+            latest_direction="bearish",
+            direction_changed=True,
+            previous_confidence_score=72,
+            latest_confidence_score=58,
+            confidence_change=-14,
+            confidence_changed=True,
+        )
+
+        brief = self.generator.generate([], trend_change=trend_change)
+
+        self.assertIn("Trend Change", brief)
+        self.assertIn("Previous Direction: Bullish", brief)
+        self.assertIn("Current Direction: Bearish", brief)
+        self.assertIn("Confidence Change: -14 points", brief)
+
+    def test_omits_trend_change_without_a_previous_view(self) -> None:
+        trend_change = MarketTrendChange(
+            previous_date=None,
+            latest_date="2026-07-19",
+            previous_direction=None,
+            latest_direction="neutral",
+            direction_changed=False,
+            previous_confidence_score=None,
+            latest_confidence_score=50,
+            confidence_change=0,
+            confidence_changed=False,
+        )
+
+        brief = self.generator.generate([], trend_change=trend_change)
+
+        self.assertNotIn("Trend Change", brief)
 
     def test_generates_empty_report(self) -> None:
         self.assertEqual(
