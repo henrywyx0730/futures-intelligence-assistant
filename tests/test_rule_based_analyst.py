@@ -133,6 +133,72 @@ class RuleBasedAnalystTests(unittest.TestCase):
             analysis.reasoning_details,
         )
 
+    def test_applies_crude_oil_specific_rules(self) -> None:
+        analysis = self.analyst.analyze(
+            [
+                make_information(
+                    "Energy outlook",
+                    "OPEC production cuts were announced.",
+                    commodities=("crude_oil",),
+                )
+            ]
+        )[0]
+
+        self.assertEqual(analysis.market_direction, "bullish")
+        self.assertIn(
+            "Crude oil bullish signals: opec production cuts.",
+            analysis.reasoning_details,
+        )
+
+    def test_applies_gold_specific_rules(self) -> None:
+        analysis = self.analyst.analyze(
+            [
+                make_information(
+                    "Gold outlook",
+                    "Central bank buying continued this quarter.",
+                )
+            ]
+        )[0]
+
+        self.assertEqual(analysis.market_direction, "bullish")
+        self.assertIn(
+            "Gold bullish signals: central bank buying.",
+            analysis.reasoning_details,
+        )
+
+    def test_applies_agriculture_specific_rules(self) -> None:
+        analysis = self.analyst.analyze(
+            [
+                make_information(
+                    "Wheat outlook",
+                    "Favorable weather prevailed and crop conditions improved.",
+                )
+            ]
+        )[0]
+
+        self.assertEqual(analysis.market_direction, "bearish")
+        self.assertIn(
+            "Agriculture bearish signals: favorable weather, crop conditions improved.",
+            analysis.reasoning_details,
+        )
+
+    def test_preserves_generic_behavior_for_unknown_commodities(self) -> None:
+        analysis = self.analyst.analyze(
+            [
+                make_information(
+                    "Lithium update",
+                    "Market data was published.",
+                    commodities=("lithium",),
+                )
+            ]
+        )[0]
+
+        self.assertEqual(analysis.market_direction, "neutral")
+        self.assertIn(
+            "No deterministic directional signal was detected.",
+            analysis.reasoning_details,
+        )
+
     def test_preserves_input_order_and_references(self) -> None:
         first = make_information("Gold update", "Market data")
         second = make_information("Corn update", "Crop data")

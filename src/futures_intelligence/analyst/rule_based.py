@@ -28,6 +28,29 @@ BEARISH_KEYWORDS = (
     "supply increased",
     "oversupply",
 )
+COMMODITY_RULES = (
+    (
+        "Crude oil",
+        frozenset({"Crude Oil"}),
+        frozenset({"crude_oil"}),
+        ("opec production cuts", "refinery outage", "inventory draw"),
+        ("opec production increase", "refinery restart"),
+    ),
+    (
+        "Gold",
+        frozenset({"Gold"}),
+        frozenset({"gold"}),
+        ("central bank buying", "safe haven demand", "weaker dollar"),
+        ("higher real yields", "stronger dollar"),
+    ),
+    (
+        "Agriculture",
+        frozenset({"Corn", "Soybean Meal", "Wheat"}),
+        frozenset({"corn", "soybean_meal", "wheat"}),
+        ("drought", "crop damage", "poor harvest"),
+        ("favorable weather", "record harvest", "crop conditions improved"),
+    ),
+)
 
 
 class RuleBasedAnalyst(BaseAnalyst):
@@ -46,7 +69,7 @@ class RuleBasedAnalyst(BaseAnalyst):
         text = f"{item.title} {item.content}".lower()
         commodities = _detected_commodities(text, self._commodity_keywords)
         market_direction, directional_details, directional_confidence = (
-            _directional_signals(item, text)
+            _directional_signals(item, text, commodities)
         )
         reasoning_details = [
             f"Source type: {item.source_type}; reliability score: {item.reliability_score}/5."
@@ -149,7 +172,9 @@ def _detected_commodities(
 
 
 def _directional_signals(
-    item: MarketInformation, text: str
+    item: MarketInformation,
+    text: str,
+    detected_commodities: tuple[str, ...],
 ) -> tuple[str, tuple[str, ...], int]:
     """Determine direction from structured quote data or deterministic text terms."""
     price_change = item.metadata.get("price_change")
@@ -174,17 +199,31 @@ def _directional_signals(
 
     bullish_matches = _matched_keywords(text, BULLISH_KEYWORDS)
     bearish_matches = _matched_keywords(text, BEARISH_KEYWORDS)
-    if len(bullish_matches) > len(bearish_matches):
+    commodity_bullish, commodity_bearish, commodity_details = _commodity_signals(
+        item,
+        text,
+        detected_commodities,
+    )
+    bullish_details = _generic_signal_details(
+        "Bullish", bullish_matches
+    ) + commodity_details[0]
+    bearish_details = _generic_signal_details(
+        "Bearish", bearish_matches
+    ) + commodity_details[1]
+    bullish_count = len(bullish_matches) + len(commodity_bullish)
+    bearish_count = len(bearish_matches) + len(commodity_bearish)
+    confidence = 15 if commodity_bullish or commodity_bearish else 10
+    if bullish_count > bearish_count:
         return (
             "bullish",
-            (f"Bullish text signals: {', '.join(bullish_matches)}.",),
-            10,
+            bullish_details,
+            confidence,
         )
-    if len(bearish_matches) > len(bullish_matches):
+    if bearish_count > bullish_count:
         return (
             "bearish",
-            (f"Bearish text signals: {', '.join(bearish_matches)}.",),
-            10,
+            bearish_details,
+            confidence,
         )
     return (
         "neutral",
@@ -196,6 +235,51 @@ def _directional_signals(
 def _matched_keywords(text: str, keywords: tuple[str, ...]) -> tuple[str, ...]:
     """Return matched keywords in their configured deterministic order."""
     return tuple(keyword for keyword in keywords if keyword in text)
+
+
+def _generic_signal_details(
+    direction: str, matches: tuple[str, ...]
+) -> tuple[str, ...]:
+    """Return a reasoning detail when generic directional keywords matched."""
+    if not matches:
+        return ()
+    return (f"{direction} text signals: {', '.join(matches)}.",)
+
+
+def _commodity_signals(
+    item: MarketInformation,
+    text: str,
+    detected_commodities: tuple[str, ...],
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[tuple[str, ...], tuple[str, ...]]]:
+    """Return rule signals for configured or detected commodity groups."""
+    detected = frozenset(detected_commodities)
+    configured = frozenset(commodity.lower() for commodity in item.commodities)
+    bullish_matches: list[str] = []
+    bearish_matches: list[str] = []
+    bullish_details: list[str] = []
+    bearish_details: list[str] = []
+
+    for name, labels, keys, bullish_keywords, bearish_keywords in COMMODITY_RULES:
+        if not (detected & labels or configured & keys):
+            continue
+        matched_bullish = _matched_keywords(text, bullish_keywords)
+        matched_bearish = _matched_keywords(text, bearish_keywords)
+        bullish_matches.extend(matched_bullish)
+        bearish_matches.extend(matched_bearish)
+        if matched_bullish:
+            bullish_details.append(
+                f"{name} bullish signals: {', '.join(matched_bullish)}."
+            )
+        if matched_bearish:
+            bearish_details.append(
+                f"{name} bearish signals: {', '.join(matched_bearish)}."
+            )
+
+    return (
+        tuple(bullish_matches),
+        tuple(bearish_matches),
+        (tuple(bullish_details), tuple(bearish_details)),
+    )
 
 
 def _is_number(value: object) -> bool:
