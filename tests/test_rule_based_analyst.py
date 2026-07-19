@@ -7,7 +7,11 @@ from futures_intelligence.analyst.rule_based import RuleBasedAnalyst
 from futures_intelligence.models import MarketInformation
 
 
-def make_information(title: str, content: str) -> MarketInformation:
+def make_information(
+    title: str,
+    content: str,
+    **fields: object,
+) -> MarketInformation:
     """Create a normalized item for rule-based analysis tests."""
     return MarketInformation(
         title=title,
@@ -15,6 +19,7 @@ def make_information(title: str, content: str) -> MarketInformation:
         source_type="test",
         published_time=datetime(2026, 7, 16, tzinfo=timezone.utc),
         content=content,
+        **fields,
     )
 
 
@@ -72,6 +77,60 @@ class RuleBasedAnalystTests(unittest.TestCase):
             analysis.summary,
             "No tracked commodity keywords detected. "
             "Review the information for broader market context.",
+        )
+
+    def test_produces_bullish_analysis_from_structured_price_change(self) -> None:
+        analysis = self.analyst.analyze(
+            [
+                make_information(
+                    "Gold market update",
+                    "Market data was published.",
+                    reliability_score=4,
+                    commodities=("gold",),
+                    metadata={"price_change": 12.5, "symbol": "GC=F"},
+                )
+            ]
+        )[0]
+
+        self.assertEqual(analysis.market_direction, "bullish")
+        self.assertEqual(analysis.confidence_score, 95)
+        self.assertIn(
+            "Structured price change is positive (12.5).",
+            analysis.reasoning_details,
+        )
+        self.assertIn(
+            "Detected commodity keywords: Gold.", analysis.reasoning_details
+        )
+
+    def test_produces_bearish_analysis_from_text_signals(self) -> None:
+        analysis = self.analyst.analyze(
+            [
+                make_information(
+                    "Crude oil update",
+                    "Inventories increased as demand weakened.",
+                    reliability_score=3,
+                    commodities=("crude_oil",),
+                )
+            ]
+        )[0]
+
+        self.assertEqual(analysis.market_direction, "bearish")
+        self.assertEqual(analysis.confidence_score, 80)
+        self.assertIn(
+            "Bearish text signals: inventories increased, demand weakened.",
+            analysis.reasoning_details,
+        )
+
+    def test_produces_neutral_analysis_without_directional_signals(self) -> None:
+        analysis = self.analyst.analyze(
+            [make_information("Policy statement", "The statement was published.")]
+        )[0]
+
+        self.assertEqual(analysis.market_direction, "neutral")
+        self.assertEqual(analysis.confidence_score, 50)
+        self.assertIn(
+            "No deterministic directional signal was detected.",
+            analysis.reasoning_details,
         )
 
     def test_preserves_input_order_and_references(self) -> None:

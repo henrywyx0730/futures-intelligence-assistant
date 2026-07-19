@@ -33,10 +33,18 @@ def store_market_analysis(database_path: str | Path, analysis: MarketAnalysis) -
             )
             cursor = connection.execute(
                 """
-                INSERT INTO market_analysis (market_information_id, summary)
-                VALUES (?, ?)
+                INSERT INTO market_analysis (
+                    market_information_id, summary, market_direction,
+                    confidence_score, reasoning_details
+                ) VALUES (?, ?, ?, ?, ?)
                 """,
-                (information_id, analysis.summary),
+                (
+                    information_id,
+                    analysis.summary,
+                    analysis.market_direction,
+                    analysis.confidence_score,
+                    json.dumps(analysis.reasoning_details),
+                ),
             )
             return int(cursor.lastrowid)
     finally:
@@ -53,7 +61,7 @@ def get_recent_market_information(
         rows = connection.execute(
             """
             SELECT title, source, source_type, published_time, content, category,
-                   commodities, regions, importance, reliability_score, url
+                   commodities, regions, importance, reliability_score, url, metadata
             FROM market_information
             """
         ).fetchall()
@@ -83,7 +91,10 @@ def get_recent_market_analysis(
                    market_information.commodities, market_information.regions,
                    market_information.importance,
                    market_information.reliability_score, market_information.url,
-                   market_analysis.summary, market_analysis.created_at
+                   market_information.metadata,
+                   market_analysis.summary, market_analysis.market_direction,
+                   market_analysis.confidence_score, market_analysis.reasoning_details,
+                   market_analysis.created_at
             FROM market_analysis
             JOIN market_information
                 ON market_analysis.market_information_id = market_information.id
@@ -96,7 +107,13 @@ def get_recent_market_analysis(
         row for row in rows if _analysis_created_at(row[-1]) >= cutoff
     ]
     return [
-        MarketAnalysis(_market_information_from_row(row[:11]), str(row[11]))
+        MarketAnalysis(
+            market_information=_market_information_from_row(row[:12]),
+            summary=str(row[12]),
+            market_direction=str(row[13]),
+            confidence_score=int(row[14]),
+            reasoning_details=tuple(json.loads(str(row[15]))),
+        )
         for row in reversed(recent_rows)
     ]
 
@@ -109,8 +126,8 @@ def _insert_market_information(
         """
         INSERT INTO market_information (
             title, source, source_type, published_time, content, category,
-            commodities, regions, importance, reliability_score, url
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            commodities, regions, importance, reliability_score, url, metadata
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             information.title,
@@ -124,6 +141,7 @@ def _insert_market_information(
             information.importance,
             information.reliability_score,
             information.url,
+            json.dumps(information.metadata),
         ),
     )
     return int(cursor.lastrowid)
@@ -150,6 +168,7 @@ def _market_information_from_row(row: tuple[object, ...]) -> MarketInformation:
         importance=str(row[8]),
         reliability_score=int(row[9]),
         url=row[10] if isinstance(row[10], str) else None,
+        metadata=json.loads(str(row[11])),
     )
 
 

@@ -1,0 +1,19 @@
+{
+  "items": [
+    {
+      "title": "Weekly Petroleum Status Report",
+      "published_time": "2026-07-18T09:30:00Z",
+      "content": "Commercial crude oil inventories decreased by 2.1 million barrels.",
+      "category": ["energy", "official_data"],
+      "commodities": ["crude_oil"],
+      "regions": ["United States"],
+      "importance": "high",
+      "reliability_score": 5,
+      "url": "https://example.gov/petroleum-status",
+      "metadata": {
+        "series_id": "WCESTUS1",
+        "unit": "million barrels"
+      }
+    }
+  ]
+}

@@ -98,6 +98,9 @@ class MorningBriefServiceTests(unittest.TestCase):
         self.assertEqual(service.information, [information])
         self.assertEqual(len(service.analyses), 1)
         self.assertIs(service.analyses[0].market_information, information)
+        self.assertIsNotNone(service.aggregated_market_view)
+        assert service.aggregated_market_view is not None
+        self.assertEqual(service.aggregated_market_view.analysis_count, 1)
         self.assertEqual(service.runtime_configuration.brief_lookback_hours, 12)
         self.assertEqual(
             service.runtime_configuration.brief_output_directory,

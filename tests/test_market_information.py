@@ -42,6 +42,7 @@ class MarketInformationTests(unittest.TestCase):
         self.assertEqual(item.importance, "medium")
         self.assertEqual(item.reliability_score, 3)
         self.assertIsNone(item.url)
+        self.assertEqual(item.metadata, {})
 
     def test_normalizes_whitespace(self) -> None:
         item = MarketInformation(
@@ -65,12 +66,29 @@ class MarketInformationTests(unittest.TestCase):
         self.assertEqual(item.url, "https://www.eia.gov")
 
     def test_to_dict_is_json_serializable(self) -> None:
-        item = MarketInformation(**self.valid_fields, category=("energy",))
+        item = MarketInformation(
+            **self.valid_fields,
+            category=("energy",),
+            metadata={"series": {"id": "WCESTUS1"}, "values": (1, 2)},
+        )
         data = item.to_dict()
 
         self.assertEqual(data["published_time"], "2026-07-15T09:00:00+00:00")
         self.assertEqual(data["category"], ["energy"])
+        self.assertEqual(data["metadata"], {"series": {"id": "WCESTUS1"}, "values": [1, 2]})
         json.dumps(data)
+
+    def test_copies_structured_metadata(self) -> None:
+        metadata = {"series": {"id": "WCESTUS1"}}
+        item = MarketInformation(**self.valid_fields, metadata=metadata)
+
+        metadata["series"]["id"] = "changed"
+
+        self.assertEqual(item.metadata, {"series": {"id": "WCESTUS1"}})
+
+    def test_rejects_non_json_compatible_metadata(self) -> None:
+        with self.assertRaises(TypeError):
+            MarketInformation(**self.valid_fields, metadata={"invalid": {1, 2}})
 
     def test_rejects_empty_required_fields(self) -> None:
         for field_name in ("title", "source", "source_type", "content"):

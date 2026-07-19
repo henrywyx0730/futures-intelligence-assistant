@@ -1,0 +1,12 @@
+{
+  "items": [
+    {
+      "symbol": "CL=F",
+      "price": 81.25,
+      "price_change": -0.75,
+      "volume": 182345,
+      "open_interest": 247891,
+      "timestamp": "2026-07-18T09:45:00Z"
+    }
+  ]
+}

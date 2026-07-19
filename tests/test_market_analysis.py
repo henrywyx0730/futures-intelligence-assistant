@@ -26,6 +26,25 @@ class MarketAnalysisTests(unittest.TestCase):
 
         self.assertIs(analysis.market_information, information)
         self.assertEqual(analysis.summary, "Inventory data was published.")
+        self.assertEqual(analysis.market_direction, "neutral")
+        self.assertEqual(analysis.confidence_score, 0)
+        self.assertEqual(analysis.reasoning_details, ())
+
+    def test_creates_rich_analysis_with_normalized_fields(self) -> None:
+        analysis = MarketAnalysis(
+            make_information(),
+            "Inventory data was published.",
+            market_direction=" BULLISH ",
+            confidence_score=85,
+            reasoning_details=(" Inventory declined ", "Demand improved"),
+        )
+
+        self.assertEqual(analysis.market_direction, "bullish")
+        self.assertEqual(analysis.confidence_score, 85)
+        self.assertEqual(
+            analysis.reasoning_details,
+            ("Inventory declined", "Demand improved"),
+        )
 
     def test_rejects_empty_summary(self) -> None:
         with self.assertRaises(ValueError):
@@ -34,6 +53,18 @@ class MarketAnalysisTests(unittest.TestCase):
     def test_rejects_invalid_market_information(self) -> None:
         with self.assertRaises(TypeError):
             MarketAnalysis("not information", "Summary")
+
+    def test_rejects_invalid_rich_analysis_fields(self) -> None:
+        invalid_fields = (
+            {"market_direction": "sideways"},
+            {"confidence_score": -1},
+            {"confidence_score": 101},
+            {"reasoning_details": (" ",)},
+        )
+        for fields in invalid_fields:
+            with self.subTest(fields=fields):
+                with self.assertRaises(ValueError):
+                    MarketAnalysis(make_information(), "Summary", **fields)
 
 
 if __name__ == "__main__":

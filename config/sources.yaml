@@ -42,6 +42,23 @@ sources:
         update_frequency: daily
         reliability_score: 4
 
+    local_examples:
+      - name: Sample Local Research Desk
+        source_type: research_report
+        priority: medium
+        enabled: true
+        content_path: data/research_reports/sample_crude_oil_outlook.txt
+        title: Sample Crude Oil Outlook
+        category:
+          - energy
+          - macro
+        commodities:
+          - crude_oil
+        regions:
+          - global
+        update_frequency: daily
+        reliability_score: 4
+
   financial_news:
     international_sources:
       - name: Reuters

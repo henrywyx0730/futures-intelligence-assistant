@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import datetime
+from math import isfinite
 from typing import Any
 
 
@@ -25,6 +27,7 @@ class MarketInformation:
     importance: str = "medium"
     reliability_score: int = 3
     url: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Normalize text fields and validate the normalized item."""
@@ -37,6 +40,7 @@ class MarketInformation:
         self.regions = _normalize_text_tuple("regions", self.regions)
         self.importance = _normalize_required_text("importance", self.importance)
         self.url = _normalize_url(self.url)
+        self.metadata = _normalize_metadata(self.metadata)
 
         if self.published_time.tzinfo is None or (
             self.published_time.utcoffset() is None
@@ -63,6 +67,7 @@ class MarketInformation:
             "importance": self.importance,
             "reliability_score": self.reliability_score,
             "url": self.url,
+            "metadata": self.metadata,
         }
 
 
@@ -87,3 +92,35 @@ def _normalize_url(value: str | None) -> str | None:
     if not isinstance(value, str):
         raise TypeError("url must be a string or None")
     return value.strip() or None
+
+
+def _normalize_metadata(value: Any) -> dict[str, Any]:
+    """Return independent JSON-compatible structured source metadata."""
+    if not isinstance(value, Mapping):
+        raise TypeError("metadata must be a mapping with string keys")
+    return {
+        _normalize_metadata_key(key): _normalize_metadata_value(item)
+        for key, item in value.items()
+    }
+
+
+def _normalize_metadata_key(value: object) -> str:
+    """Validate a metadata field name without changing its source-specific form."""
+    if not isinstance(value, str) or not value:
+        raise ValueError("metadata keys must be non-empty strings")
+    return value
+
+
+def _normalize_metadata_value(value: Any) -> Any:
+    """Recursively copy values that can be serialized as standard JSON."""
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not isfinite(value):
+            raise ValueError("metadata float values must be finite")
+        return value
+    if isinstance(value, Mapping):
+        return _normalize_metadata(value)
+    if isinstance(value, (list, tuple)):
+        return [_normalize_metadata_value(item) for item in value]
+    raise TypeError("metadata values must be JSON-compatible")

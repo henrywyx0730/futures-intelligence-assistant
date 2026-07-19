@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 import unittest
 
+from futures_intelligence.analyst import AggregatedMarketView
 from futures_intelligence.generator import MorningBriefGenerator
 from futures_intelligence.models import MarketAnalysis, MarketInformation
 
@@ -36,6 +37,12 @@ class MorningBriefGeneratorTests(unittest.TestCase):
         self.assertEqual(
             brief,
             "Morning Futures Brief\n"
+            "\n"
+            "Market Overview\n"
+            "Direction: Neutral\n"
+            "Confidence: 0/100\n"
+            "Reasoning:\n"
+            "- No reasoning details available.\n\n"
             "Top analyses: 2 of 2\n\n"
             "1. Oil update (Energy Desk)\n"
             "   Oil demand remains in focus.\n\n"
@@ -56,10 +63,37 @@ class MorningBriefGeneratorTests(unittest.TestCase):
         self.assertIn("5. Update 5 (Test Source)", brief)
         self.assertNotIn("Update 6", brief)
 
+    def test_includes_provided_aggregated_market_view(self) -> None:
+        view = AggregatedMarketView(
+            overall_market_direction="bullish",
+            aggregated_confidence_score=82,
+            reasoning_details=("Positive price momentum.", "Demand improved."),
+            analysis_count=1,
+        )
+
+        brief = self.generator.generate(
+            [make_analysis("Oil update", "Energy Desk", "Oil demand improved.")],
+            view,
+        )
+
+        self.assertIn("Market Overview", brief)
+        self.assertIn("Direction: Bullish", brief)
+        self.assertIn("Confidence: 82/100", brief)
+        self.assertIn("- Positive price momentum.", brief)
+        self.assertIn("- Demand improved.", brief)
+        self.assertIn("1. Oil update (Energy Desk)", brief)
+
     def test_generates_empty_report(self) -> None:
         self.assertEqual(
             self.generator.generate([]),
-            "Morning Futures Brief\nTop analyses: 0 of 0",
+            "Morning Futures Brief\n"
+            "\n"
+            "Market Overview\n"
+            "Direction: Neutral\n"
+            "Confidence: 0/100\n"
+            "Reasoning:\n"
+            "- No analyses available for aggregation.\n\n"
+            "Top analyses: 0 of 0",
         )
 
 

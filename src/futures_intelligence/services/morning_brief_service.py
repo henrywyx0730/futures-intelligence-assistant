@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from futures_intelligence.analyst import AggregatedMarketView, MarketAnalysisAggregator
 from futures_intelligence.analyst.rule_based import RuleBasedAnalyst
 from futures_intelligence.database import (
     initialize_database,
@@ -73,6 +74,7 @@ class MorningBriefService:
         """Initialize the latest pipeline outputs for CLI presentation."""
         self.information: list[MarketInformation] = []
         self.analyses: list[MarketAnalysis] = []
+        self.aggregated_market_view: AggregatedMarketView | None = None
         self.runtime_configuration = RuntimeConfiguration()
         self.health_report: HealthReport | None = None
         self.brief_output_path: Path | None = None
@@ -113,7 +115,11 @@ class MorningBriefService:
         for analysis in self.analyses:
             store_market_analysis(database_path, analysis)
 
-        brief = MorningBriefGenerator().generate(self.analyses)
+        self.aggregated_market_view = MarketAnalysisAggregator().aggregate(self.analyses)
+        brief = MorningBriefGenerator().generate(
+            self.analyses,
+            self.aggregated_market_view,
+        )
         self.brief_output_path = save_morning_brief(
             brief,
             self.runtime_configuration.brief_output_directory,

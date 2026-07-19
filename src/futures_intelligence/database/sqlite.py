@@ -29,17 +29,53 @@ def initialize_database(
             regions TEXT NOT NULL DEFAULT '[]',
             importance TEXT NOT NULL,
             reliability_score INTEGER NOT NULL,
-            url TEXT
+            url TEXT,
+            metadata TEXT NOT NULL DEFAULT '{}'
         );
 
         CREATE TABLE IF NOT EXISTS market_analysis (
             id INTEGER PRIMARY KEY,
             market_information_id INTEGER NOT NULL,
             summary TEXT NOT NULL,
+            market_direction TEXT NOT NULL DEFAULT 'neutral',
+            confidence_score INTEGER NOT NULL DEFAULT 0,
+            reasoning_details TEXT NOT NULL DEFAULT '[]',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (market_information_id) REFERENCES market_information(id)
         );
         """
     )
+    _add_metadata_column_if_needed(connection)
+    _add_market_analysis_columns_if_needed(connection)
     connection.commit()
     return connection
+
+
+def _add_metadata_column_if_needed(connection: sqlite3.Connection) -> None:
+    """Upgrade existing local databases with structured source metadata."""
+    columns = {
+        str(row[1])
+        for row in connection.execute("PRAGMA table_info(market_information)")
+    }
+    if "metadata" not in columns:
+        connection.execute(
+            "ALTER TABLE market_information "
+            "ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'"
+        )
+
+
+def _add_market_analysis_columns_if_needed(connection: sqlite3.Connection) -> None:
+    """Upgrade existing local databases with richer analysis fields."""
+    columns = {
+        str(row[1]) for row in connection.execute("PRAGMA table_info(market_analysis)")
+    }
+    additions = {
+        "market_direction": "TEXT NOT NULL DEFAULT 'neutral'",
+        "confidence_score": "INTEGER NOT NULL DEFAULT 0",
+        "reasoning_details": "TEXT NOT NULL DEFAULT '[]'",
+    }
+    for column, definition in additions.items():
+        if column not in columns:
+            connection.execute(
+                f"ALTER TABLE market_analysis ADD COLUMN {column} {definition}"
+            )
