@@ -44,7 +44,7 @@ def append_market_intelligence_history(
     )
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    history = _read_history(output_path)
+    history = read_market_intelligence_history(output_path)
     history.append(entry.to_dict())
     output_path.write_text(json.dumps(history, indent=2) + "\n", encoding="utf-8")
     return entry
@@ -62,10 +62,11 @@ def _combined_values(
     return tuple(combined)
 
 
-def _read_history(path: Path) -> list[dict[str, object]]:
+def read_market_intelligence_history(path: str | Path) -> list[dict[str, object]]:
     """Return a valid existing local history list, or an empty history."""
+    history_path = Path(path)
     try:
-        history = json.loads(path.read_text(encoding="utf-8"))
+        history = json.loads(history_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return []
     if not isinstance(history, list):
