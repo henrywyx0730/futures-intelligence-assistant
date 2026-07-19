@@ -16,6 +16,7 @@ from futures_intelligence.main import (
 )
 from futures_intelligence.models import MarketAnalysis, MarketInformation
 from futures_intelligence.utils.health import HealthReport
+from futures_intelligence.utils.llm_usage import LLMUsageRecord
 
 
 class MainTests(unittest.TestCase):
@@ -99,6 +100,26 @@ class MainTests(unittest.TestCase):
         analyst.analyze_smoke_test.return_value = LLMSmokeTestResult(
             success=True,
             analysis=analysis,
+            usage_record=LLMUsageRecord(
+                timestamp_utc="2026-07-19T00:00:00+00:00",
+                purpose="smoke_test",
+                model="test-model",
+                response_id="resp_test_123",
+                source_type="research_report",
+                source_name="Test Source",
+                source_title=information.title,
+                success=True,
+                failure_category=None,
+                input_tokens=100,
+                cached_input_tokens=20,
+                cache_write_tokens=10,
+                output_tokens=30,
+                reasoning_tokens=12,
+                total_tokens=130,
+                estimated_cost_usd=0.0002645,
+                pricing_effective_date="2026-07-19",
+            ),
+            usage_file_path="data/llm_usage.jsonl",
         )
 
         output = StringIO()
@@ -119,6 +140,12 @@ class MainTests(unittest.TestCase):
         self.assertIn("Real LLM smoke test succeeded", output.getvalue())
         self.assertIn("Model: test-model", output.getvalue())
         self.assertIn("Market Direction: Bullish", output.getvalue())
+        self.assertIn("Input Tokens: 100", output.getvalue())
+        self.assertIn("Cached Input Tokens: 20", output.getvalue())
+        self.assertIn("Output Tokens: 30", output.getvalue())
+        self.assertIn("Total Tokens: 130", output.getvalue())
+        self.assertIn("Estimated Cost (USD): 0.0002645", output.getvalue())
+        self.assertIn("Usage Record Path: data/llm_usage.jsonl", output.getvalue())
         configured_model.assert_called_once_with()
 
     @patch("futures_intelligence.main._configured_llm_model", return_value="test-model")

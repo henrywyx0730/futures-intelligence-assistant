@@ -21,6 +21,10 @@ class ConfigurationLoaderTests(unittest.TestCase):
         self.assertIn("    model: gpt-5.6-luna\n", runtime_text)
         self.assertIn("      - research_report\n", runtime_text)
         self.assertIn("    max_items_per_run: 5\n", runtime_text)
+        self.assertIn("    usage:\n", runtime_text)
+        self.assertIn("      file_path: data/llm_usage.jsonl\n", runtime_text)
+        self.assertIn("    pricing:\n", runtime_text)
+        self.assertIn('      effective_date: "2026-07-19"\n', runtime_text)
 
 
 if __name__ == "__main__":

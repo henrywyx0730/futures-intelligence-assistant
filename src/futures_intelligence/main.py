@@ -7,11 +7,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from futures_intelligence.analyst import LLMAnalyst
-from futures_intelligence.config.loader import load_all_configurations
 from futures_intelligence.models import MarketAnalysis, MarketInformation
 from futures_intelligence.services import MorningBriefService
-from futures_intelligence.services.morning_brief_service import DEFAULT_LLM_MODEL
+from futures_intelligence.services.morning_brief_service import (
+    DEFAULT_LLM_MODEL,
+    load_runtime_configuration,
+)
 from futures_intelligence.utils.health import HealthReport
+from futures_intelligence.utils.llm_usage import (
+    LLMPricing,
+    LLMUsageRecord,
+    LLMUsageTracker,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -73,7 +80,11 @@ def _run_llm_smoke_test(
         print(f"LLM smoke test failed: unable to load runtime configuration: {error}")
         return 1
 
-    analyst = analyst or LLMAnalyst(model=model, max_items_per_run=1)
+    analyst = analyst or LLMAnalyst(
+        model=model,
+        max_items_per_run=1,
+        usage_tracker=_configured_llm_usage_tracker(),
+    )
     result = analyst.analyze_smoke_test(information)
     if not result.success or result.analysis is None:
         print(f"LLM smoke test failed: {result.error or 'no structured result returned.'}")
@@ -89,6 +100,7 @@ def _run_llm_smoke_test(
     print("Reasoning Details:")
     for detail in analysis.reasoning_details:
         print(f"- {detail}")
+    _print_llm_usage(result.usage_record, result.usage_file_path)
     return 0
 
 
@@ -117,10 +129,43 @@ def _load_smoke_test_information(
 
 def _configured_llm_model() -> str:
     """Return the configured OpenAI model, using the runtime safe default."""
-    runtime = load_all_configurations().get("runtime", {})
-    llm = runtime.get("llm") if isinstance(runtime, dict) else None
-    model = llm.get("model") if isinstance(llm, dict) else None
-    return model.strip() if isinstance(model, str) and model.strip() else DEFAULT_LLM_MODEL
+    return load_runtime_configuration().llm.model or DEFAULT_LLM_MODEL
+
+
+def _configured_llm_usage_tracker() -> LLMUsageTracker:
+    """Build a local tracker from runtime settings without reading any secret."""
+    llm = load_runtime_configuration().llm
+    return LLMUsageTracker(
+        llm.usage.file_path,
+        LLMPricing(
+            model=llm.pricing.model,
+            effective_date=llm.pricing.effective_date,
+            input_per_million_usd=llm.pricing.input_per_million_usd,
+            cached_input_per_million_usd=llm.pricing.cached_input_per_million_usd,
+            output_per_million_usd=llm.pricing.output_per_million_usd,
+            cache_write_multiplier=llm.pricing.cache_write_multiplier,
+        ),
+    )
+
+
+def _print_llm_usage(
+    usage_record: LLMUsageRecord | None,
+    usage_file_path: str | None,
+) -> None:
+    """Print safe local accounting details from the single completed API response."""
+    if usage_record is None:
+        print("Input Tokens: unavailable")
+        print("Cached Input Tokens: unavailable")
+        print("Output Tokens: unavailable")
+        print("Total Tokens: unavailable")
+        print("Estimated Cost (USD): unavailable")
+    else:
+        print(f"Input Tokens: {usage_record.input_tokens}")
+        print(f"Cached Input Tokens: {usage_record.cached_input_tokens}")
+        print(f"Output Tokens: {usage_record.output_tokens}")
+        print(f"Total Tokens: {usage_record.total_tokens}")
+        print(f"Estimated Cost (USD): {usage_record.estimated_cost_usd}")
+    print(f"Usage Record Path: {usage_file_path or 'unavailable'}")
 
 
 def _print_information_preview(information: list[MarketInformation]) -> None:

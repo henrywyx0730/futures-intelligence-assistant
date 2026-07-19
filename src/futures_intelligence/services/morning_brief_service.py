@@ -33,6 +33,7 @@ from futures_intelligence.utils.market_history import (
     MarketIntelligenceHistoryEntry,
     append_market_intelligence_history,
 )
+from futures_intelligence.utils.llm_usage import LLMPricing, LLMUsageTracker
 
 
 DEFAULT_DATABASE_PATH = "futures_intelligence.db"
@@ -47,6 +48,12 @@ DEFAULT_LLM_PROVIDER = "openai"
 DEFAULT_LLM_MODEL = "gpt-5.6-luna"
 DEFAULT_LLM_SOURCE_TYPES = ("research_report",)
 DEFAULT_LLM_MAX_ITEMS_PER_RUN = 5
+DEFAULT_LLM_USAGE_FILE = "data/llm_usage.jsonl"
+DEFAULT_LLM_PRICING_EFFECTIVE_DATE = "2026-07-19"
+DEFAULT_LLM_INPUT_PER_MILLION_USD = 1.00
+DEFAULT_LLM_CACHED_INPUT_PER_MILLION_USD = 0.10
+DEFAULT_LLM_OUTPUT_PER_MILLION_USD = 6.00
+DEFAULT_LLM_CACHE_WRITE_MULTIPLIER = 1.25
 
 
 @dataclass(frozen=True)
@@ -80,6 +87,25 @@ class HistorySettings:
 
 
 @dataclass(frozen=True)
+class LLMUsageSettings:
+    """Runtime location for append-only local LLM usage records."""
+
+    file_path: str = DEFAULT_LLM_USAGE_FILE
+
+
+@dataclass(frozen=True)
+class LLMPricingSettings:
+    """A reviewable local pricing snapshot used for cost estimates."""
+
+    model: str = DEFAULT_LLM_MODEL
+    effective_date: str = DEFAULT_LLM_PRICING_EFFECTIVE_DATE
+    input_per_million_usd: float = DEFAULT_LLM_INPUT_PER_MILLION_USD
+    cached_input_per_million_usd: float = DEFAULT_LLM_CACHED_INPUT_PER_MILLION_USD
+    output_per_million_usd: float = DEFAULT_LLM_OUTPUT_PER_MILLION_USD
+    cache_write_multiplier: float = DEFAULT_LLM_CACHE_WRITE_MULTIPLIER
+
+
+@dataclass(frozen=True)
 class LLMSettings:
     """Optional local runtime settings for controlled LLM analysis."""
 
@@ -88,6 +114,8 @@ class LLMSettings:
     model: str = DEFAULT_LLM_MODEL
     source_types: tuple[str, ...] = DEFAULT_LLM_SOURCE_TYPES
     max_items_per_run: int = DEFAULT_LLM_MAX_ITEMS_PER_RUN
+    usage: LLMUsageSettings = field(default_factory=LLMUsageSettings)
+    pricing: LLMPricingSettings = field(default_factory=LLMPricingSettings)
 
 
 @dataclass(frozen=True)
@@ -121,9 +149,7 @@ class MorningBriefService:
     def run(self) -> str:
         """Collect, process, persist, analyze, and return a morning brief."""
         configurations = _load_all_configurations()
-        self.runtime_configuration = _runtime_configuration(
-            configurations.get("runtime")
-        )
+        self.runtime_configuration = _runtime_configuration(configurations.get("runtime"))
         logger = configure_logging(
             self.runtime_configuration.logging.level,
             self.runtime_configuration.logging.file_path,
@@ -154,6 +180,23 @@ class MorningBriefService:
         llm_analyst = LLMAnalyst(
             model=llm_settings.model,
             max_items_per_run=llm_settings.max_items_per_run,
+            usage_tracker=LLMUsageTracker(
+                llm_settings.usage.file_path,
+                LLMPricing(
+                    model=llm_settings.pricing.model,
+                    effective_date=llm_settings.pricing.effective_date,
+                    input_per_million_usd=llm_settings.pricing.input_per_million_usd,
+                    cached_input_per_million_usd=(
+                        llm_settings.pricing.cached_input_per_million_usd
+                    ),
+                    output_per_million_usd=(
+                        llm_settings.pricing.output_per_million_usd
+                    ),
+                    cache_write_multiplier=(
+                        llm_settings.pricing.cache_write_multiplier
+                    ),
+                ),
+            ),
         )
         self.analyses = AnalystRouter(
             llm_enabled=llm_settings.enabled and llm_settings.provider == "openai",
@@ -198,6 +241,11 @@ def _load_all_configurations() -> dict[str, dict[str, Any]]:
     return load_all_configurations()
 
 
+def load_runtime_configuration() -> RuntimeConfiguration:
+    """Load normalized runtime settings for a narrow non-service entry point."""
+    return _runtime_configuration(_load_all_configurations().get("runtime"))
+
+
 def _runtime_configuration(value: object) -> RuntimeConfiguration:
     """Normalize optional runtime settings without enabling scheduling."""
     if not isinstance(value, dict):
@@ -210,6 +258,10 @@ def _runtime_configuration(value: object) -> RuntimeConfiguration:
     health_settings = value.get("health")
     history_settings = value.get("history")
     llm_settings = value.get("llm")
+    llm_usage = llm_settings.get("usage") if isinstance(llm_settings, dict) else None
+    llm_pricing = (
+        llm_settings.get("pricing") if isinstance(llm_settings, dict) else None
+    )
 
     return RuntimeConfiguration(
         database_path=(
@@ -304,6 +356,48 @@ def _runtime_configuration(value: object) -> RuntimeConfiguration:
                 else None,
                 DEFAULT_LLM_MAX_ITEMS_PER_RUN,
             ),
+            usage=LLMUsageSettings(
+                file_path=_non_empty_text(
+                    llm_usage.get("file_path") if isinstance(llm_usage, dict) else None,
+                    DEFAULT_LLM_USAGE_FILE,
+                ),
+            ),
+            pricing=LLMPricingSettings(
+                model=_non_empty_text(
+                    llm_pricing.get("model") if isinstance(llm_pricing, dict) else None,
+                    DEFAULT_LLM_MODEL,
+                ),
+                effective_date=_non_empty_text(
+                    llm_pricing.get("effective_date")
+                    if isinstance(llm_pricing, dict)
+                    else None,
+                    DEFAULT_LLM_PRICING_EFFECTIVE_DATE,
+                ),
+                input_per_million_usd=_non_negative_float(
+                    llm_pricing.get("input_per_million_usd")
+                    if isinstance(llm_pricing, dict)
+                    else None,
+                    DEFAULT_LLM_INPUT_PER_MILLION_USD,
+                ),
+                cached_input_per_million_usd=_non_negative_float(
+                    llm_pricing.get("cached_input_per_million_usd")
+                    if isinstance(llm_pricing, dict)
+                    else None,
+                    DEFAULT_LLM_CACHED_INPUT_PER_MILLION_USD,
+                ),
+                output_per_million_usd=_non_negative_float(
+                    llm_pricing.get("output_per_million_usd")
+                    if isinstance(llm_pricing, dict)
+                    else None,
+                    DEFAULT_LLM_OUTPUT_PER_MILLION_USD,
+                ),
+                cache_write_multiplier=_non_negative_float(
+                    llm_pricing.get("cache_write_multiplier")
+                    if isinstance(llm_pricing, dict)
+                    else None,
+                    DEFAULT_LLM_CACHE_WRITE_MULTIPLIER,
+                ),
+            ),
         ),
     )
 
@@ -312,6 +406,18 @@ def _positive_int(value: object, default: int) -> int:
     """Return a positive integer configuration value or its safe default."""
     if isinstance(value, int) and not isinstance(value, bool) and value > 0:
         return value
+    return default
+
+
+def _non_empty_text(value: object, default: str) -> str:
+    """Return a stripped text configuration value or a safe default."""
+    return value.strip() if isinstance(value, str) and value.strip() else default
+
+
+def _non_negative_float(value: object, default: float) -> float:
+    """Return a non-negative numeric configuration value or a safe default."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+        return float(value)
     return default
 
 

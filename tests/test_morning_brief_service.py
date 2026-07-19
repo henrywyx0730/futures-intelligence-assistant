@@ -72,6 +72,15 @@ class MorningBriefServiceTests(unittest.TestCase):
                     "model": "test-model",
                     "source_types": ["research_report"],
                     "max_items_per_run": 2,
+                    "usage": {"file_path": "data/test-llm-usage.jsonl"},
+                    "pricing": {
+                        "model": "test-model",
+                        "effective_date": "2026-07-19",
+                        "input_per_million_usd": 1.0,
+                        "cached_input_per_million_usd": 0.1,
+                        "output_per_million_usd": 6.0,
+                        "cache_write_multiplier": 1.25,
+                    },
                 },
             },
         }
@@ -148,6 +157,11 @@ class MorningBriefServiceTests(unittest.TestCase):
         self.assertEqual(service.runtime_configuration.llm.model, "test-model")
         self.assertEqual(service.runtime_configuration.llm.source_types, ("research_report",))
         self.assertEqual(service.runtime_configuration.llm.max_items_per_run, 2)
+        self.assertEqual(
+            service.runtime_configuration.llm.usage.file_path,
+            "data/test-llm-usage.jsonl",
+        )
+        self.assertEqual(service.runtime_configuration.llm.pricing.model, "test-model")
         self.assertIs(service.health_report, health_report)
         self.assertIs(service.market_intelligence_history_entry, append_history.return_value)
         self.assertIs(
@@ -191,6 +205,8 @@ class MorningBriefServiceTests(unittest.TestCase):
         self.assertEqual(runtime.llm.model, "gpt-5.6-luna")
         self.assertEqual(runtime.llm.source_types, ("research_report",))
         self.assertEqual(runtime.llm.max_items_per_run, 5)
+        self.assertEqual(runtime.llm.usage.file_path, "data/llm_usage.jsonl")
+        self.assertEqual(runtime.llm.pricing.model, "gpt-5.6-luna")
 
 
 if __name__ == "__main__":

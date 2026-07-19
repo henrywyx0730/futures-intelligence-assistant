@@ -10,6 +10,12 @@ from typing import Any, Protocol
 from futures_intelligence.analyst.base import BaseAnalyst
 from futures_intelligence.analyst.rule_based import RuleBasedAnalyst
 from futures_intelligence.models import MarketAnalysis, MarketInformation
+from futures_intelligence.utils.llm_usage import (
+    FailureCategory,
+    LLMUsageRecord,
+    LLMUsageTracker,
+    RequestPurpose,
+)
 
 
 ANALYSIS_SCHEMA: dict[str, object] = {
@@ -53,6 +59,8 @@ class LLMSmokeTestResult:
     success: bool
     analysis: MarketAnalysis | None = None
     error: str | None = None
+    usage_record: LLMUsageRecord | None = None
+    usage_file_path: str | None = None
 
 
 class LLMAnalyst(BaseAnalyst):
@@ -64,6 +72,7 @@ class LLMAnalyst(BaseAnalyst):
         max_items_per_run: int = 5,
         client: ResponsesClient | None = None,
         fallback_analyst: BaseAnalyst | None = None,
+        usage_tracker: LLMUsageTracker | None = None,
     ) -> None:
         """Configure a lazy client boundary without reading or logging credentials."""
         if not isinstance(model, str) or not (normalized_model := model.strip()):
@@ -78,6 +87,7 @@ class LLMAnalyst(BaseAnalyst):
         self.max_items_per_run = max_items_per_run
         self._client = client
         self._fallback_analyst = fallback_analyst or RuleBasedAnalyst()
+        self._usage_tracker = usage_tracker
 
     def analyze(self, information: list[MarketInformation]) -> list[MarketAnalysis]:
         """Return ordered analyses, using deterministic fallback for unavailable items."""
@@ -107,21 +117,43 @@ class LLMAnalyst(BaseAnalyst):
             if client is None:
                 return LLMSmokeTestResult(success=False, error=error)
 
-        analysis, error = self._request_analysis(client, item)
+        analysis, error, usage_record = self._request_analysis(
+            client,
+            item,
+            purpose="smoke_test",
+        )
         if analysis is None:
-            return LLMSmokeTestResult(success=False, error=error)
-        return LLMSmokeTestResult(success=True, analysis=analysis)
+            return LLMSmokeTestResult(
+                success=False,
+                error=error,
+                usage_record=usage_record,
+                usage_file_path=self._usage_file_path(),
+            )
+        return LLMSmokeTestResult(
+            success=True,
+            analysis=analysis,
+            usage_record=usage_record,
+            usage_file_path=self._usage_file_path(),
+        )
 
     def _analyze_item(
         self, client: ResponsesClient, item: MarketInformation
     ) -> MarketAnalysis | None:
         """Request and validate one structured local-content-only analysis."""
-        analysis, _ = self._request_analysis(client, item)
+        analysis, _, _ = self._request_analysis(
+            client,
+            item,
+            purpose="morning_brief",
+        )
         return analysis
 
     def _request_analysis(
-        self, client: ResponsesClient, item: MarketInformation
-    ) -> tuple[MarketAnalysis | None, str | None]:
+        self,
+        client: ResponsesClient,
+        item: MarketInformation,
+        *,
+        purpose: RequestPurpose,
+    ) -> tuple[MarketAnalysis | None, str | None, LLMUsageRecord | None]:
         """Make one Responses API request and return an explicit validation error."""
         try:
             response = client.responses.create(
@@ -143,12 +175,63 @@ class LLMAnalyst(BaseAnalyst):
                 tool_choice="none",
                 store=False,
             )
-        except Exception:
-            return None, "OpenAI API request failed."
+        except Exception as error:
+            return (
+                None,
+                "OpenAI API request failed.",
+                self._record_failure(item, purpose, _failure_category(error)),
+            )
         analysis = _analysis_from_response(item, response)
         if analysis is None:
-            return None, "OpenAI returned no valid structured analysis."
-        return analysis, None
+            return (
+                None,
+                "OpenAI returned no valid structured analysis.",
+                self._record_failure(
+                    item,
+                    purpose,
+                    _response_failure_category(response),
+                    response,
+                ),
+            )
+        return analysis, None, self._record_success(item, purpose, response)
+
+    def _record_success(
+        self,
+        item: MarketInformation,
+        purpose: RequestPurpose,
+        response: object,
+    ) -> LLMUsageRecord | None:
+        """Persist actual response usage without adding another API request."""
+        if self._usage_tracker is None:
+            return None
+        return self._usage_tracker.record_success(
+            purpose=purpose,
+            information=item,
+            configured_model=self.model,
+            response=response,
+        )
+
+    def _record_failure(
+        self,
+        item: MarketInformation,
+        purpose: RequestPurpose,
+        failure_category: FailureCategory,
+        response: object | None = None,
+    ) -> LLMUsageRecord | None:
+        """Persist a sanitized result for a request attempt that did not validate."""
+        if self._usage_tracker is None:
+            return None
+        return self._usage_tracker.record_failure(
+            purpose=purpose,
+            information=item,
+            configured_model=self.model,
+            failure_category=failure_category,
+            response=response,
+        )
+
+    def _usage_file_path(self) -> str | None:
+        """Return the configured local usage location without reading its contents."""
+        return str(self._usage_tracker.file_path) if self._usage_tracker else None
 
 
 def _openai_client_from_environment() -> ResponsesClient | None:
@@ -219,3 +302,24 @@ def _valid_payload(payload: dict[str, object]) -> bool:
             isinstance(detail, str) and detail.strip() for detail in reasoning_details
         )
     )
+
+
+def _failure_category(error: Exception) -> FailureCategory:
+    """Classify an exception without persisting its potentially sensitive message."""
+    name = type(error).__name__.lower()
+    if "auth" in name or "permission" in name:
+        return "authentication_error"
+    if "rate" in name and "limit" in name:
+        return "rate_limit_error"
+    if "api" in name:
+        return "api_error"
+    return "unknown_error"
+
+
+def _response_failure_category(response: object) -> FailureCategory:
+    """Distinguish a refusal from a malformed structured response."""
+    if getattr(response, "refusal", None) or not isinstance(
+        getattr(response, "output_text", None), str
+    ):
+        return "refusal"
+    return "malformed_output"
