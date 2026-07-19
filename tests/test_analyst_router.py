@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 import unittest
 
-from futures_intelligence.analyst import AnalystRouter, RuleBasedAnalyst
+from futures_intelligence.analyst import AnalystRouter, LLMAnalyst, RuleBasedAnalyst
 from futures_intelligence.models import MarketInformation
 
 
@@ -49,6 +49,12 @@ class AnalystRouterTests(unittest.TestCase):
         analyst = self.router.select_analyst(make_information("future_source"))
 
         self.assertIsInstance(analyst, RuleBasedAnalyst)
+
+    def test_accepts_a_future_llm_route_override(self) -> None:
+        llm_analyst = LLMAnalyst()
+        router = AnalystRouter({"rss": llm_analyst})
+
+        self.assertIs(router.select_analyst(make_information("rss")), llm_analyst)
 
     def test_rejects_non_market_information_values(self) -> None:
         with self.assertRaises(TypeError):
