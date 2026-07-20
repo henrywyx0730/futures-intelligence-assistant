@@ -148,6 +148,33 @@ class LLMAnalystTests(unittest.TestCase):
             self.assertIn('"purpose": "morning_brief"', records[0])
             self.assertIn('"success": true', records[0])
 
+    def test_last_usage_record_is_cleared_for_each_analyze_invocation(self) -> None:
+        with TemporaryDirectory() as directory:
+            analyst = LLMAnalyst(
+                client=FakeClient([successful_response()]),
+                usage_tracker=LLMUsageTracker(
+                    Path(directory) / "llm_usage.jsonl",
+                    LLMPricing(
+                        model="gpt-5.6-luna",
+                        effective_date="2026-07-19",
+                        input_per_million_usd=1.0,
+                        cached_input_per_million_usd=0.1,
+                        output_per_million_usd=6.0,
+                        cache_write_multiplier=1.25,
+                    ),
+                ),
+            )
+
+            analyst.analyze([make_information()])
+            first_record = analyst.last_usage_record
+            first_record_persisted = analyst.last_usage_record_persisted
+            analyst.analyze([])
+
+            self.assertIsNotNone(first_record)
+            self.assertTrue(first_record_persisted)
+            self.assertIsNone(analyst.last_usage_record)
+            self.assertIsNone(analyst.last_usage_record_persisted)
+
     def test_smoke_test_success_returns_the_appended_usage_record(self) -> None:
         with TemporaryDirectory() as directory:
             tracker = LLMUsageTracker(

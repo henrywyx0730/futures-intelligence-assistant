@@ -6,8 +6,10 @@ import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 
-from futures_intelligence.analyst import LLMAnalyst
+from futures_intelligence.analyst import AnalystRouter, LLMCandidateSelector, LLMAnalyst
+from futures_intelligence.analyst.llm import _openai_client_for_smoke_test
 from futures_intelligence.models import MarketAnalysis, MarketInformation
+from futures_intelligence.processing.ranker import InformationRanker
 from futures_intelligence.services import MorningBriefService
 from futures_intelligence.services.morning_brief_service import (
     DEFAULT_LLM_MODEL,
@@ -35,6 +37,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if arguments.command == "llm-smoke-test":
         return _run_llm_smoke_test()
+    if arguments.command == "llm-routing-smoke-test":
+        return _run_llm_routing_smoke_test()
     return 1
 
 
@@ -48,6 +52,10 @@ def _parse_arguments(argv: list[str] | None) -> argparse.Namespace:
     commands.add_parser(
         "llm-smoke-test",
         help="Run one strict OpenAI smoke test against the local research report.",
+    )
+    commands.add_parser(
+        "llm-routing-smoke-test",
+        help="Run one strict production-routing OpenAI smoke test.",
     )
     return parser.parse_args(argv)
 
@@ -104,6 +112,82 @@ def _run_llm_smoke_test(
     return 0
 
 
+def _run_llm_routing_smoke_test(
+    analyst: LLMAnalyst | None = None,
+    sample_path: Path = SMOKE_TEST_REPORT_PATH,
+) -> int:
+    """Run one strict real-API check through the production LLM routing chain."""
+    try:
+        information = _load_routing_smoke_test_information(sample_path)
+        model = _configured_llm_model()
+    except (OSError, ValueError, FileNotFoundError, RuntimeError) as error:
+        print(f"LLM routing smoke test failed: unable to prepare input: {error}")
+        return 1
+
+    if analyst is None:
+        client, error = _openai_client_for_smoke_test()
+        if client is None:
+            print(f"LLM routing smoke test failed: {error}")
+            return 1
+        analyst = LLMAnalyst(
+            model=model,
+            max_items_per_run=1,
+            client=client,
+            usage_tracker=_configured_llm_usage_tracker(),
+            usage_purpose="smoke_test",
+        )
+
+    ranked_information = InformationRanker().rank([information])
+    selection = LLMCandidateSelector(
+        enabled=True,
+        source_types=("research_report",),
+        min_reliability_score=4,
+        max_items_per_run=1,
+    ).select(ranked_information)
+    if selection.eligible_count != 1 or len(selection.selected_items) != 1:
+        print("LLM routing smoke test failed: no candidates were selected.")
+        return 1
+
+    router = AnalystRouter(
+        llm_analyst=analyst,
+        llm_candidates=selection.selected_items,
+        max_llm_items=1,
+    )
+    selected_analyst = router.select_analyst(ranked_information[0])
+    analyses = router.analyze(ranked_information)
+    usage_record = analyst.last_usage_record
+    if (
+        selected_analyst is not analyst
+        or len(analyses) != 1
+        or analyses[0].market_information is not information
+        or usage_record is None
+        or not analyst.last_usage_record_persisted
+        or not usage_record.success
+        or not usage_record.response_id
+    ):
+        print(
+            "LLM routing smoke test failed: the real LLM request did not return "
+            "a valid structured response."
+        )
+        return 1
+
+    analysis = analyses[0]
+    print("Real LLM routing smoke test succeeded: structured response received from OpenAI.")
+    print(f"Model: {model}")
+    print(f"Eligible Candidate Count: {selection.eligible_count}")
+    print(f"Selected Candidate Count: {len(selection.selected_items)}")
+    print(f"Selected Source Title: {information.title}")
+    print(f"Analyst Implementation: {type(selected_analyst).__name__}")
+    print(f"Summary: {analysis.summary}")
+    print(f"Market Direction: {analysis.market_direction.title()}")
+    print(f"Confidence Score: {analysis.confidence_score}")
+    print("Reasoning Details:")
+    for detail in analysis.reasoning_details:
+        print(f"- {detail}")
+    _print_llm_usage(usage_record, analyst.usage_file_path)
+    return 0
+
+
 def _load_smoke_test_information(
     sample_path: Path = SMOKE_TEST_REPORT_PATH,
 ) -> MarketInformation:
@@ -123,6 +207,29 @@ def _load_smoke_test_information(
         commodities=("crude_oil",),
         regions=("global",),
         reliability_score=3,
+        metadata={"local_report_path": str(sample_path)},
+    )
+
+
+def _load_routing_smoke_test_information(
+    sample_path: Path = SMOKE_TEST_REPORT_PATH,
+) -> MarketInformation:
+    """Load the fixed report as an eligible high-reliability routing candidate."""
+    content = sample_path.read_text(encoding="utf-8")
+    lines = content.splitlines()
+    title = next((line.strip() for line in lines if line.strip()), "")
+    if not title:
+        raise ValueError("research report does not contain a title")
+    return MarketInformation(
+        title=title,
+        source="Local research report routing smoke test",
+        source_type="research_report",
+        published_time=datetime.now(timezone.utc),
+        content=content,
+        category=("energy",),
+        commodities=("crude_oil",),
+        regions=("global",),
+        reliability_score=5,
         metadata={"local_report_path": str(sample_path)},
     )
 

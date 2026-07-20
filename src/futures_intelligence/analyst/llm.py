@@ -73,6 +73,7 @@ class LLMAnalyst(BaseAnalyst):
         client: ResponsesClient | None = None,
         fallback_analyst: BaseAnalyst | None = None,
         usage_tracker: LLMUsageTracker | None = None,
+        usage_purpose: RequestPurpose = "morning_brief",
     ) -> None:
         """Configure a lazy client boundary without reading or logging credentials."""
         if not isinstance(model, str) or not (normalized_model := model.strip()):
@@ -83,14 +84,36 @@ class LLMAnalyst(BaseAnalyst):
             or max_items_per_run < 1
         ):
             raise ValueError("max_items_per_run must be a positive integer")
+        if usage_purpose not in {"smoke_test", "morning_brief"}:
+            raise ValueError("usage_purpose must be 'smoke_test' or 'morning_brief'")
         self.model = normalized_model
         self.max_items_per_run = max_items_per_run
         self._client = client
         self._fallback_analyst = fallback_analyst or RuleBasedAnalyst()
         self._usage_tracker = usage_tracker
+        self._usage_purpose = usage_purpose
+        self._last_usage_record: LLMUsageRecord | None = None
+        self._last_usage_record_persisted: bool | None = None
+
+    @property
+    def last_usage_record(self) -> LLMUsageRecord | None:
+        """Return the immutable usage result created by the current analyze call."""
+        return self._last_usage_record
+
+    @property
+    def usage_file_path(self) -> str | None:
+        """Return the configured local usage path without exposing tracker internals."""
+        return str(self._usage_tracker.file_path) if self._usage_tracker else None
+
+    @property
+    def last_usage_record_persisted(self) -> bool | None:
+        """Return local persistence status for the current analysis invocation."""
+        return self._last_usage_record_persisted
 
     def analyze(self, information: list[MarketInformation]) -> list[MarketAnalysis]:
         """Return ordered analyses, using deterministic fallback for unavailable items."""
+        self._last_usage_record = None
+        self._last_usage_record_persisted = None
         client = self._client or _openai_client_from_environment()
         analyses: list[MarketAnalysis] = []
         for index, item in enumerate(information):
@@ -143,7 +166,7 @@ class LLMAnalyst(BaseAnalyst):
         analysis, _, _ = self._request_analysis(
             client,
             item,
-            purpose="morning_brief",
+            purpose=self._usage_purpose,
         )
         return analysis
 
@@ -204,12 +227,15 @@ class LLMAnalyst(BaseAnalyst):
         """Persist actual response usage without adding another API request."""
         if self._usage_tracker is None:
             return None
-        return self._usage_tracker.record_success(
+        record = self._usage_tracker.record_success(
             purpose=purpose,
             information=item,
             configured_model=self.model,
             response=response,
         )
+        self._last_usage_record = record
+        self._last_usage_record_persisted = self._usage_tracker.last_append_succeeded
+        return record
 
     def _record_failure(
         self,
@@ -221,13 +247,16 @@ class LLMAnalyst(BaseAnalyst):
         """Persist a sanitized result for a request attempt that did not validate."""
         if self._usage_tracker is None:
             return None
-        return self._usage_tracker.record_failure(
+        record = self._usage_tracker.record_failure(
             purpose=purpose,
             information=item,
             configured_model=self.model,
             failure_category=failure_category,
             response=response,
         )
+        self._last_usage_record = record
+        self._last_usage_record_persisted = self._usage_tracker.last_append_succeeded
+        return record
 
     def _usage_file_path(self) -> str | None:
         """Return the configured local usage location without reading its contents."""

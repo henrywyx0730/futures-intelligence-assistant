@@ -88,6 +88,7 @@ class LLMUsageTrackerTests(unittest.TestCase):
             self.assertEqual(record.reasoning_tokens, 12)
             self.assertEqual(record.total_tokens, 130)
             self.assertEqual(record.estimated_cost_usd, 0.0002645)
+            self.assertTrue(tracker.last_append_succeeded)
             stored = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(stored["purpose"], "smoke_test")
             self.assertTrue(stored["success"])

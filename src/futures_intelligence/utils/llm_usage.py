@@ -68,6 +68,12 @@ class LLMUsageTracker:
     def __init__(self, file_path: str | Path, pricing: LLMPricing) -> None:
         self.file_path = Path(file_path)
         self.pricing = pricing
+        self._last_append_succeeded: bool | None = None
+
+    @property
+    def last_append_succeeded(self) -> bool | None:
+        """Return whether the most recently constructed record reached local storage."""
+        return self._last_append_succeeded
 
     def record_success(
         self,
@@ -149,18 +155,19 @@ class LLMUsageTracker:
             ),
             pricing_effective_date=self.pricing.effective_date,
         )
-        self._append(record)
+        self._last_append_succeeded = self._append(record)
         return record
 
-    def _append(self, record: LLMUsageRecord) -> None:
+    def _append(self, record: LLMUsageRecord) -> bool:
         """Append one line atomically enough for a local single-process utility."""
         try:
             self.file_path.parent.mkdir(parents=True, exist_ok=True)
             with self.file_path.open("a", encoding="utf-8") as output:
                 output.write(json.dumps(record.to_dict(), ensure_ascii=False) + "\n")
+            return True
         except OSError:
             # Usage accounting must not turn an optional LLM failure into a pipeline crash.
-            return
+            return False
 
 
 @dataclass(frozen=True)
