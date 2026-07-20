@@ -2,6 +2,7 @@
 
 from futures_intelligence.analyst.aggregator import (
     AggregatedMarketView,
+    CommodityMarketView,
     MarketAnalysisAggregator,
 )
 from futures_intelligence.analyst.base import BaseAnalyst
@@ -17,6 +18,7 @@ __all__ = [
     "AggregatedMarketView",
     "AnalystRouter",
     "BaseAnalyst",
+    "CommodityMarketView",
     "LLMCandidateSelection",
     "LLMCandidateSelector",
     "LLMAnalyst",

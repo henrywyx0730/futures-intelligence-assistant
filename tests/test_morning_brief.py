@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 import unittest
 
-from futures_intelligence.analyst import AggregatedMarketView
+from futures_intelligence.analyst import AggregatedMarketView, CommodityMarketView
 from futures_intelligence.generator import MorningBriefGenerator
 from futures_intelligence.models import MarketAnalysis, MarketInformation
 from futures_intelligence.processing import MarketTrendChange
@@ -108,6 +108,48 @@ class MorningBriefGeneratorTests(unittest.TestCase):
         self.assertIn("Direction: Bullish", overview)
         self.assertIn("Bullish text signals: supply disruption.", overview)
         self.assertNotIn("No deterministic directional signal was detected.", overview)
+
+    def test_renders_separate_commodity_overviews_without_cross_commodity_reasoning(self) -> None:
+        views = (
+            CommodityMarketView(
+                commodity_key="crude_oil",
+                commodity_label="Crude Oil",
+                analysis_count=1,
+                overall_direction="bullish",
+                confidence_score=80,
+                reasoning_details=("Crude oil bullish signals: inventory draw.",),
+            ),
+            CommodityMarketView(
+                commodity_key="gold",
+                commodity_label="Gold",
+                analysis_count=1,
+                overall_direction="bearish",
+                confidence_score=70,
+                reasoning_details=("Gold bearish signals: stronger dollar.",),
+            ),
+            CommodityMarketView(
+                commodity_key="wheat",
+                commodity_label="Wheat",
+                analysis_count=1,
+                overall_direction="neutral",
+                confidence_score=50,
+                reasoning_details=("No deterministic directional signal was detected.",),
+            ),
+        )
+        unclassified = make_analysis("Policy update", "Macro Desk", "Broader context.")
+
+        brief = self.generator.generate(
+            [unclassified],
+            commodity_market_views=views,
+        )
+
+        self.assertIn("Crude Oil\nDirection: Bullish", brief)
+        self.assertIn("Gold\nDirection: Bearish", brief)
+        self.assertIn("Wheat\nDirection: Neutral", brief)
+        self.assertIn("Signals: 1", brief)
+        self.assertIn("1. Policy update (Macro Desk)", brief)
+        crude_section = brief.split("Gold", maxsplit=1)[0]
+        self.assertNotIn("Gold bearish signals", crude_section)
 
     def test_includes_comparable_trend_change(self) -> None:
         trend_change = MarketTrendChange(

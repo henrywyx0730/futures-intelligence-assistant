@@ -3,6 +3,10 @@
 from datetime import datetime, timezone
 import unittest
 
+from futures_intelligence.analyst.commodity_matcher import (
+    CommodityDefinition,
+    CommodityMatcher,
+)
 from futures_intelligence.analyst.rule_based import RuleBasedAnalyst
 from futures_intelligence.models import MarketInformation
 
@@ -94,7 +98,12 @@ class RuleBasedAnalystTests(unittest.TestCase):
         )
 
     def test_safely_handles_aliases_with_regular_expression_metacharacters(self) -> None:
-        self.analyst._commodity_keywords = (("c++", "C Plus"),)  # type: ignore[attr-defined]
+        self.analyst._commodity_matcher = CommodityMatcher(  # type: ignore[attr-defined]
+            definitions=(
+                CommodityDefinition("c_plus", "C Plus", ("c++",)),
+            ),
+            ambiguous_alias_exclusions=(),
+        )
 
         analysis = self.analyst.analyze(
             [make_information("C++ futures update", "Market data.")]

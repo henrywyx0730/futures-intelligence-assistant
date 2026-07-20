@@ -146,6 +146,8 @@ class MorningBriefServiceTests(unittest.TestCase):
         self.assertIsNotNone(service.aggregated_market_view)
         assert service.aggregated_market_view is not None
         self.assertEqual(service.aggregated_market_view.analysis_count, 1)
+        self.assertEqual(len(service.commodity_market_views), 1)
+        self.assertEqual(service.commodity_market_views[0].commodity_key, "gold")
         self.assertEqual(service.runtime_configuration.brief_lookback_hours, 12)
         self.assertEqual(
             service.runtime_configuration.brief_output_directory,

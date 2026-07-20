@@ -9,6 +9,7 @@ from typing import Any
 from futures_intelligence.analyst import (
     AggregatedMarketView,
     AnalystRouter,
+    CommodityMarketView,
     LLMCandidateSelector,
     LLMAnalyst,
     MarketAnalysisAggregator,
@@ -143,6 +144,7 @@ class MorningBriefService:
         self.information: list[MarketInformation] = []
         self.analyses: list[MarketAnalysis] = []
         self.aggregated_market_view: AggregatedMarketView | None = None
+        self.commodity_market_views: tuple[CommodityMarketView, ...] = ()
         self.runtime_configuration = RuntimeConfiguration()
         self.health_report: HealthReport | None = None
         self.brief_output_path: Path | None = None
@@ -223,7 +225,9 @@ class MorningBriefService:
         for analysis in self.analyses:
             store_market_analysis(database_path, analysis)
 
-        self.aggregated_market_view = MarketAnalysisAggregator().aggregate(self.analyses)
+        aggregator = MarketAnalysisAggregator()
+        self.aggregated_market_view = aggregator.aggregate(self.analyses)
+        self.commodity_market_views = aggregator.aggregate_by_commodity(self.analyses)
         self.market_trend_change = MarketTrendChangeDetector().detect(
             self.runtime_configuration.history.file_path
         )
@@ -231,6 +235,7 @@ class MorningBriefService:
             self.analyses,
             self.aggregated_market_view,
             self.market_trend_change,
+            commodity_market_views=self.commodity_market_views,
         )
         self.brief_output_path = save_morning_brief(
             brief,

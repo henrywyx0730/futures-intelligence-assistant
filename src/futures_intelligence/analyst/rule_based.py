@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-import re
-
 from futures_intelligence.analyst.base import BaseAnalyst
-from futures_intelligence.models import MarketAnalysis, MarketInformation
-
-
-COMMODITY_KEYWORDS_FILE = (
-    Path(__file__).resolve().parents[3] / "knowledge" / "commodity_keywords.yaml"
+from futures_intelligence.analyst.commodity_matcher import (
+    CommodityMatch,
+    CommodityMatcher,
+    phrase_matches,
 )
+from futures_intelligence.models import MarketAnalysis, MarketInformation
 
 BULLISH_KEYWORDS = (
     "inventory declined",
@@ -56,10 +53,7 @@ class RuleBasedAnalyst(BaseAnalyst):
 
     def __init__(self) -> None:
         """Load the configured commodity aliases."""
-        (
-            self._commodity_keywords,
-            self._ambiguous_alias_exclusions,
-        ) = _load_commodity_keywords()
+        self._commodity_matcher = CommodityMatcher()
 
     def analyze(self, information: list[MarketInformation]) -> list[MarketAnalysis]:
         """Return one deterministic analysis for each information item."""
@@ -68,11 +62,7 @@ class RuleBasedAnalyst(BaseAnalyst):
     def _analysis_for(self, item: MarketInformation) -> MarketAnalysis:
         """Build one rich, deterministic analysis without changing its summary."""
         text = f"{item.title} {item.content}".lower()
-        commodities = _detected_commodities(
-            text,
-            self._commodity_keywords,
-            self._ambiguous_alias_exclusions,
-        )
+        commodities = _commodity_labels(self._commodity_matcher.match(item))
         market_direction, directional_details, directional_confidence = (
             _directional_signals(item, text, commodities)
         )
@@ -102,12 +92,7 @@ class RuleBasedAnalyst(BaseAnalyst):
 
     def _summary_for(self, item: MarketInformation) -> str:
         """Build a concise interpretation from title and content keywords."""
-        text = f"{item.title} {item.content}".lower()
-        commodities = _detected_commodities(
-            text,
-            self._commodity_keywords,
-            self._ambiguous_alias_exclusions,
-        )
+        commodities = _commodity_labels(self._commodity_matcher.match(item))
         if commodities:
             return (
                 f"Detected commodity focus: {', '.join(commodities)}. "
@@ -119,110 +104,9 @@ class RuleBasedAnalyst(BaseAnalyst):
         )
 
 
-def _load_commodity_keywords() -> tuple[
-    tuple[tuple[str, str], ...], tuple[tuple[str, tuple[str, ...]], ...]
-]:
-    """Load aliases and explicit generic-alias exclusions in stable file order."""
-    keywords: list[tuple[str, str]] = []
-    exclusions: list[tuple[str, tuple[str, ...]]] = []
-    label: str | None = None
-    aliases: list[str] = []
-    excluded_alias: str | None = None
-    excluded_phrases: list[str] = []
-    section = "commodities"
-
-    def add_commodity() -> None:
-        if label is None:
-            return
-        if not aliases:
-            raise ValueError("Each commodity keyword entry must define string aliases")
-        keywords.extend((alias.lower(), label) for alias in aliases)
-
-    def add_exclusions() -> None:
-        if excluded_alias is None:
-            return
-        if not excluded_phrases:
-            raise ValueError("Ambiguous aliases must define exclusion phrases")
-        exclusions.append(
-            (excluded_alias.lower(), tuple(phrase.lower() for phrase in excluded_phrases))
-        )
-
-    lines = COMMODITY_KEYWORDS_FILE.read_text(encoding="utf-8").splitlines()
-    if not lines or lines[0].strip() != "commodities:":
-        raise ValueError("Commodity keyword file must start with a commodities mapping")
-
-    for line in lines[1:]:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-
-        indentation = len(line) - len(line.lstrip())
-        if indentation == 0 and stripped == "ambiguous_alias_exclusions:":
-            add_commodity()
-            label = None
-            aliases = []
-            section = "ambiguous_alias_exclusions"
-        elif section == "commodities" and indentation == 2 and stripped.endswith(":"):
-            add_commodity()
-            label = None
-            aliases = []
-        elif section == "commodities" and indentation == 4 and stripped.startswith("label:"):
-            label = stripped.removeprefix("label:").strip()
-            if not label:
-                raise ValueError("Each commodity keyword entry must define a label")
-        elif section == "commodities" and indentation == 4 and stripped == "aliases:":
-            continue
-        elif section == "commodities" and indentation == 6 and stripped.startswith("- "):
-            alias = stripped.removeprefix("- ").strip()
-            if not alias:
-                raise ValueError("Commodity aliases must be non-empty strings")
-            aliases.append(alias)
-        elif section == "ambiguous_alias_exclusions" and indentation == 2 and stripped.endswith(":"):
-            add_exclusions()
-            excluded_alias = stripped.removesuffix(":").strip()
-            excluded_phrases = []
-            if not excluded_alias:
-                raise ValueError("Ambiguous aliases must be non-empty strings")
-        elif (
-            section == "ambiguous_alias_exclusions"
-            and indentation == 4
-            and stripped.startswith("- ")
-        ):
-            phrase = stripped.removeprefix("- ").strip()
-            if not phrase:
-                raise ValueError("Ambiguous alias exclusions must be non-empty strings")
-            excluded_phrases.append(phrase)
-        else:
-            raise ValueError(f"Invalid commodity keyword entry: {line}")
-
-    add_commodity()
-    add_exclusions()
-    return tuple(keywords), tuple(exclusions)
-
-
-def _detected_commodities(
-    text: str,
-    commodity_keywords: tuple[tuple[str, str], ...],
-    ambiguous_alias_exclusions: tuple[tuple[str, tuple[str, ...]], ...],
-) -> tuple[str, ...]:
-    """Return unique commodity labels in a stable configured order."""
-    exclusions = dict(ambiguous_alias_exclusions)
-    matched_keywords: set[tuple[str, str]] = set()
-    for keyword, commodity in sorted(
-        commodity_keywords, key=lambda entry: len(entry[0]), reverse=True
-    ):
-        if keyword in exclusions and any(
-            _matches_phrase(text, phrase) for phrase in exclusions[keyword]
-        ):
-            continue
-        if _matches_phrase(text, keyword):
-            matched_keywords.add((keyword, commodity))
-
-    detected: list[str] = []
-    for keyword, commodity in commodity_keywords:
-        if (keyword, commodity) in matched_keywords and commodity not in detected:
-            detected.append(commodity)
-    return tuple(detected)
+def _commodity_labels(matches: tuple[CommodityMatch, ...]) -> tuple[str, ...]:
+    """Return configured display labels from immutable matcher results."""
+    return tuple(match.commodity_label for match in matches)
 
 
 def _directional_signals(
@@ -293,14 +177,7 @@ def _directional_signals(
 
 def _matched_keywords(text: str, keywords: tuple[str, ...]) -> tuple[str, ...]:
     """Return matched keywords in their configured deterministic order."""
-    return tuple(keyword for keyword in keywords if _matches_phrase(text, keyword))
-
-
-def _matches_phrase(text: str, phrase: str) -> bool:
-    """Match a configured phrase outside larger tokens, allowing punctuation separators."""
-    parts = phrase.casefold().split()
-    pattern = r"(?:[\W_]+)".join(re.escape(part) for part in parts)
-    return re.search(rf"(?<!\w){pattern}(?!\w)", text.casefold()) is not None
+    return tuple(keyword for keyword in keywords if phrase_matches(text, keyword))
 
 
 def _generic_signal_details(
