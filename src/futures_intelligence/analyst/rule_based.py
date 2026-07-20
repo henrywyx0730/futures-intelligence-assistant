@@ -8,6 +8,12 @@ from futures_intelligence.analyst.commodity_matcher import (
     CommodityMatcher,
     phrase_matches,
 )
+from futures_intelligence.analyst.market_movement import (
+    NUMERICAL_PRIORITY,
+    SETTLEMENT_PRIORITY,
+    MarketMovementDetector,
+    MarketMovementSignal,
+)
 from futures_intelligence.models import MarketAnalysis, MarketInformation
 
 BULLISH_KEYWORDS = (
@@ -54,6 +60,7 @@ class RuleBasedAnalyst(BaseAnalyst):
     def __init__(self) -> None:
         """Load the configured commodity aliases."""
         self._commodity_matcher = CommodityMatcher()
+        self._market_movement_detector = MarketMovementDetector()
 
     def analyze(self, information: list[MarketInformation]) -> list[MarketAnalysis]:
         """Return one deterministic analysis for each information item."""
@@ -62,9 +69,15 @@ class RuleBasedAnalyst(BaseAnalyst):
     def _analysis_for(self, item: MarketInformation) -> MarketAnalysis:
         """Build one rich, deterministic analysis without changing its summary."""
         text = f"{item.title} {item.content}".lower()
-        commodities = _commodity_labels(self._commodity_matcher.match(item))
+        commodity_matches = self._commodity_matcher.match(item)
+        commodities = _commodity_labels(commodity_matches)
         market_direction, directional_details, directional_confidence = (
-            _directional_signals(item, text, commodities)
+            _directional_signals(
+                item,
+                text,
+                commodities,
+                self._market_movement_detector.detect(item, commodity_matches),
+            )
         )
         reasoning_details = [
             f"Source type: {item.source_type}; reliability score: {item.reliability_score}/5."
@@ -113,6 +126,7 @@ def _directional_signals(
     item: MarketInformation,
     text: str,
     detected_commodities: tuple[str, ...],
+    movement_signal: MarketMovementSignal,
 ) -> tuple[str, tuple[str, ...], int]:
     """Determine direction from structured quote data or deterministic text terms."""
     price_change = item.metadata.get("price_change")
@@ -133,6 +147,15 @@ def _directional_signals(
             "neutral",
             ("Structured price change is unchanged (0).",),
             20,
+        )
+
+    if movement_signal.priority > 0:
+        return (
+            movement_signal.direction,
+            (f"Observed market movement: {movement_signal.evidence}.",),
+            {SETTLEMENT_PRIORITY: 25, NUMERICAL_PRIORITY: 20}.get(
+                movement_signal.priority, 15
+            ),
         )
 
     bullish_matches = _matched_keywords(text, BULLISH_KEYWORDS)

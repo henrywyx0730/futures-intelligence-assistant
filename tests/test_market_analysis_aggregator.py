@@ -262,6 +262,20 @@ class MarketAnalysisAggregatorTests(unittest.TestCase):
         self.assertEqual(view.confidence_score, 72)
         self.assertEqual(view.reasoning_details, ("Higher-weight official-data signal.",))
 
+    def test_observed_oil_movement_stays_in_the_crude_oil_view(self) -> None:
+        analysis = make_analysis(
+            "bullish",
+            80,
+            ("Observed market movement: Oil prices jumped 2%.",),
+            title="Oil prices jumped 2%",
+        )
+
+        views = self.aggregator.aggregate_by_commodity([analysis])
+
+        self.assertEqual([view.commodity_key for view in views], ["crude_oil"])
+        self.assertEqual(views[0].overall_direction, "bullish")
+        self.assertIn("Observed market movement", " ".join(views[0].reasoning_details))
+
     def test_source_reliability_and_type_weight_directional_signals(self) -> None:
         view = self.aggregator.aggregate(
             [

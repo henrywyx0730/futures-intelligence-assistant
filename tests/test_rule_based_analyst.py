@@ -180,6 +180,47 @@ class RuleBasedAnalystTests(unittest.TestCase):
             analysis.reasoning_details,
         )
 
+    def test_explicit_price_movement_overrides_fundamental_rules_after_metadata(self) -> None:
+        analysis = self.analyst.analyze(
+            [
+                make_information(
+                    "Oil prices jumped 2%",
+                    "Inventories increased during the session.",
+                )
+            ]
+        )[0]
+
+        self.assertEqual(analysis.market_direction, "bullish")
+        self.assertIn("Observed market movement: Oil prices jumped 2%.", analysis.reasoning_details)
+        self.assertNotIn(
+            "No deterministic directional signal was detected.", analysis.reasoning_details
+        )
+
+    def test_metadata_price_change_remains_higher_priority_than_text_movement(self) -> None:
+        analysis = self.analyst.analyze(
+            [
+                make_information(
+                    "Gold falls 2%",
+                    "Market update.",
+                    metadata={"price_change": 4.0},
+                )
+            ]
+        )[0]
+
+        self.assertEqual(analysis.market_direction, "bullish")
+        self.assertIn(
+            "Structured price change is positive (4.0).", analysis.reasoning_details
+        )
+        self.assertNotIn("Observed market movement", " ".join(analysis.reasoning_details))
+
+    def test_non_price_metric_changes_remain_without_observed_movement_reasoning(self) -> None:
+        analysis = self.analyst.analyze(
+            [make_information("Oil production is up 2%", "Market update.")]
+        )[0]
+
+        self.assertEqual(analysis.market_direction, "neutral")
+        self.assertNotIn("Observed market movement", " ".join(analysis.reasoning_details))
+
     def test_produces_neutral_analysis_without_directional_signals(self) -> None:
         analysis = self.analyst.analyze(
             [make_information("Policy statement", "The statement was published.")]

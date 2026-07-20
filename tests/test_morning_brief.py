@@ -151,6 +151,21 @@ class MorningBriefGeneratorTests(unittest.TestCase):
         crude_section = brief.split("Gold", maxsplit=1)[0]
         self.assertNotIn("Gold bearish signals", crude_section)
 
+    def test_renders_observed_movement_in_the_matching_commodity_view(self) -> None:
+        view = CommodityMarketView(
+            commodity_key="crude_oil",
+            commodity_label="Crude Oil",
+            analysis_count=1,
+            overall_direction="bearish",
+            confidence_score=75,
+            reasoning_details=("Observed market movement: Oil Futures Settle Lower.",),
+        )
+
+        brief = self.generator.generate([], commodity_market_views=(view,))
+
+        self.assertIn("Crude Oil\nDirection: Bearish", brief)
+        self.assertIn("Observed market movement: Oil Futures Settle Lower.", brief)
+
     def test_includes_comparable_trend_change(self) -> None:
         trend_change = MarketTrendChange(
             previous_date="2026-07-18",
