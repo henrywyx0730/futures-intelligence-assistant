@@ -50,16 +50,15 @@ class MarketAnalysisAggregator:
             if analysis.market_direction == "bearish"
         )
         source_weights = [_source_weight(analysis) for analysis in analyses]
+        overall_direction = _overall_direction(bullish_weight, bearish_weight)
         return AggregatedMarketView(
-            overall_market_direction=_overall_direction(
-                bullish_weight, bearish_weight
-            ),
+            overall_market_direction=overall_direction,
             aggregated_confidence_score=sum(
                 analysis.confidence_score * source_weight
                 for analysis, source_weight in zip(analyses, source_weights)
             )
             // sum(source_weights),
-            reasoning_details=_combined_reasoning_details(analyses),
+            reasoning_details=_combined_reasoning_details(analyses, overall_direction),
             analysis_count=len(analyses),
         )
 
@@ -95,11 +94,34 @@ def _source_weight(analysis: MarketAnalysis) -> int:
 
 def _combined_reasoning_details(
     analyses: list[MarketAnalysis],
+    overall_direction: str,
 ) -> tuple[str, ...]:
-    """Combine reasoning in input order while omitting duplicate details."""
+    """Combine only direction-consistent, non-boilerplate reasoning in input order."""
+    if overall_direction in {"bullish", "bearish"}:
+        supporting_analyses = [
+            analysis
+            for analysis in analyses
+            if analysis.market_direction == overall_direction
+        ]
+    elif any(analysis.market_direction == "bullish" for analysis in analyses) and any(
+        analysis.market_direction == "bearish" for analysis in analyses
+    ):
+        return ("Conflicting bullish and bearish directional signals were detected.",)
+    else:
+        supporting_analyses = [
+            analysis for analysis in analyses if analysis.market_direction == "neutral"
+        ]
+
     combined: list[str] = []
-    for analysis in analyses:
+    for analysis in supporting_analyses:
         for detail in analysis.reasoning_details:
+            if _is_source_scope_detail(detail):
+                continue
             if detail not in combined:
                 combined.append(detail)
     return tuple(combined)
+
+
+def _is_source_scope_detail(detail: str) -> bool:
+    """Exclude legacy source-scope commodity boilerplate from market reasoning."""
+    return detail.lower().startswith("configured source commodities:")

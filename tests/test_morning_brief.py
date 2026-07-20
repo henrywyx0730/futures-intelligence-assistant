@@ -84,6 +84,31 @@ class MorningBriefGeneratorTests(unittest.TestCase):
         self.assertIn("- Demand improved.", brief)
         self.assertIn("1. Oil update (Energy Desk)", brief)
 
+    def test_market_overview_omits_contradictory_neutral_reasoning(self) -> None:
+        analyses = [
+            MarketAnalysis(
+                make_analysis("Oil update", "Energy Desk", "Supply disruption.").market_information,
+                "Supply disruption.",
+                market_direction="bullish",
+                confidence_score=80,
+                reasoning_details=("Bullish text signals: supply disruption.",),
+            ),
+            MarketAnalysis(
+                make_analysis("Policy update", "Macro Desk", "No signal.").market_information,
+                "No signal.",
+                market_direction="neutral",
+                confidence_score=50,
+                reasoning_details=("No deterministic directional signal was detected.",),
+            ),
+        ]
+
+        brief = self.generator.generate(analyses)
+
+        overview = brief.split("Top analyses:", maxsplit=1)[0]
+        self.assertIn("Direction: Bullish", overview)
+        self.assertIn("Bullish text signals: supply disruption.", overview)
+        self.assertNotIn("No deterministic directional signal was detected.", overview)
+
     def test_includes_comparable_trend_change(self) -> None:
         trend_change = MarketTrendChange(
             previous_date="2026-07-18",

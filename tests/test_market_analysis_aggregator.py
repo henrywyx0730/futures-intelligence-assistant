@@ -54,8 +54,6 @@ class MarketAnalysisAggregatorTests(unittest.TestCase):
             (
                 "Shared signal.",
                 "Bullish signal.",
-                "Bearish signal.",
-                "Neutral context.",
             ),
         )
         self.assertEqual(view.analysis_count, 3)
@@ -70,6 +68,54 @@ class MarketAnalysisAggregatorTests(unittest.TestCase):
 
         self.assertEqual(view.overall_market_direction, "neutral")
         self.assertEqual(view.aggregated_confidence_score, 75)
+        self.assertEqual(
+            view.reasoning_details,
+            ("Conflicting bullish and bearish directional signals were detected.",),
+        )
+
+    def test_non_neutral_view_excludes_neutral_and_losing_direction_reasoning(self) -> None:
+        view = self.aggregator.aggregate(
+            [
+                make_analysis(
+                    "bullish",
+                    80,
+                    ("Bullish text signals: supply disruption.",),
+                ),
+                make_analysis(
+                    "bearish",
+                    60,
+                    ("Bearish text signals: inventories increased.",),
+                ),
+                make_analysis(
+                    "neutral",
+                    50,
+                    ("No deterministic directional signal was detected.",),
+                ),
+            ]
+        )
+
+        self.assertEqual(view.overall_market_direction, "bullish")
+        self.assertEqual(
+            view.reasoning_details,
+            ("Bullish text signals: supply disruption.",),
+        )
+
+    def test_neutral_view_without_directional_evidence_keeps_neutral_explanation(self) -> None:
+        view = self.aggregator.aggregate(
+            [
+                make_analysis(
+                    "neutral",
+                    50,
+                    ("No deterministic directional signal was detected.",),
+                )
+            ]
+        )
+
+        self.assertEqual(view.overall_market_direction, "neutral")
+        self.assertEqual(
+            view.reasoning_details,
+            ("No deterministic directional signal was detected.",),
+        )
 
     def test_source_reliability_and_type_weight_directional_signals(self) -> None:
         view = self.aggregator.aggregate(

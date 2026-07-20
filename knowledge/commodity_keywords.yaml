@@ -6,6 +6,7 @@ commodities:
       - oil
       - crude
       - brent
+      - wti
   butadiene_rubber:
     label: Butadiene Rubber
     aliases:
@@ -50,3 +51,11 @@ commodities:
     label: Wheat
     aliases:
       - wheat
+
+ambiguous_alias_exclusions:
+  oil:
+    - palm oil
+    - soybean oil
+    - vegetable oil
+    - canola oil
+    - sunflower oil

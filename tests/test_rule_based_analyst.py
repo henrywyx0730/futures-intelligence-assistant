@@ -44,13 +44,63 @@ class RuleBasedAnalystTests(unittest.TestCase):
         )
 
     def test_detects_crude_oil_aliases(self) -> None:
-        for alias in ("oil", "crude", "brent"):
+        for alias in ("oil", "crude", "brent", "WTI"):
             with self.subTest(alias=alias):
                 analysis = self.analyst.analyze(
                     [make_information(f"{alias} market update", "Market data")]
                 )[0]
 
                 self.assertIn("Detected commodity focus: Crude Oil.", analysis.summary)
+
+    def test_matches_generic_oil_only_outside_agricultural_product_phrases(self) -> None:
+        cases = {
+            "Oil prices rise": True,
+            "Crude futures rise": True,
+            "WTI and Brent advance": True,
+            "CONNECT WITH MARKET-MAKING FIRMS FOR GRAINS AND OILSEED PRODUCTS": False,
+            "Palm oil futures rise": False,
+            "Soybean oil demand improves": False,
+            "Vegetable oil prices rise": False,
+            "Canola oil prices rise": False,
+            "Sunflower oil prices rise": False,
+        }
+
+        for title, expected in cases.items():
+            with self.subTest(title=title):
+                analysis = self.analyst.analyze([make_information(title, "Update.")])[0]
+                self.assertEqual(
+                    "Detected commodity focus: Crude Oil." in analysis.summary,
+                    expected,
+                )
+
+    def test_matches_multi_word_aliases_with_token_boundaries_and_case_insensitivity(
+        self,
+    ) -> None:
+        analysis = self.analyst.analyze(
+            [make_information("CRUDE-OIL outlook", "Copper-market data.")]
+        )[0]
+
+        self.assertIn("Detected commodity focus: Crude Oil, Copper.", analysis.summary)
+
+    def test_does_not_match_aliases_inside_larger_words(self) -> None:
+        analysis = self.analyst.analyze(
+            [make_information("Oilseed processing update", "Goldman commentary.")]
+        )[0]
+
+        self.assertEqual(
+            analysis.summary,
+            "No tracked commodity keywords detected. "
+            "Review the information for broader market context.",
+        )
+
+    def test_safely_handles_aliases_with_regular_expression_metacharacters(self) -> None:
+        self.analyst._commodity_keywords = (("c++", "C Plus"),)  # type: ignore[attr-defined]
+
+        analysis = self.analyst.analyze(
+            [make_information("C++ futures update", "Market data.")]
+        )[0]
+
+        self.assertIn("Detected commodity focus: C Plus.", analysis.summary)
 
     def test_detects_gold(self) -> None:
         analysis = self.analyst.analyze(
@@ -93,7 +143,7 @@ class RuleBasedAnalystTests(unittest.TestCase):
         )[0]
 
         self.assertEqual(analysis.market_direction, "bullish")
-        self.assertEqual(analysis.confidence_score, 95)
+        self.assertEqual(analysis.confidence_score, 90)
         self.assertIn(
             "Structured price change is positive (12.5).",
             analysis.reasoning_details,
@@ -115,7 +165,7 @@ class RuleBasedAnalystTests(unittest.TestCase):
         )[0]
 
         self.assertEqual(analysis.market_direction, "bearish")
-        self.assertEqual(analysis.confidence_score, 80)
+        self.assertEqual(analysis.confidence_score, 70)
         self.assertIn(
             "Bearish text signals: inventories increased, demand weakened.",
             analysis.reasoning_details,
@@ -137,7 +187,7 @@ class RuleBasedAnalystTests(unittest.TestCase):
         analysis = self.analyst.analyze(
             [
                 make_information(
-                    "Energy outlook",
+                    "Crude oil outlook",
                     "OPEC production cuts were announced.",
                     commodities=("crude_oil",),
                 )
@@ -148,6 +198,41 @@ class RuleBasedAnalystTests(unittest.TestCase):
         self.assertIn(
             "Crude oil bullish signals: opec production cuts.",
             analysis.reasoning_details,
+        )
+
+    def test_source_scope_commodities_do_not_create_evidence_or_confidence(self) -> None:
+        information = make_information(
+            "Central bank statement",
+            "The policy statement was published.",
+            commodities=("crude_oil", "gold", "metals"),
+        )
+
+        analysis = self.analyst.analyze([information])[0]
+
+        self.assertEqual(
+            analysis.summary,
+            "No tracked commodity keywords detected. "
+            "Review the information for broader market context.",
+        )
+        self.assertEqual(analysis.confidence_score, 50)
+        self.assertNotIn("Configured source commodities", " ".join(analysis.reasoning_details))
+        self.assertIn("crude_oil", information.commodities)
+
+    def test_directional_analyses_do_not_include_neutral_boilerplate(self) -> None:
+        bullish = self.analyst.analyze(
+            [make_information("Oil update", "Supply disruption was reported.")]
+        )[0]
+        bearish = self.analyst.analyze(
+            [make_information("Oil update", "Inventories increased.")]
+        )[0]
+
+        self.assertEqual(bullish.market_direction, "bullish")
+        self.assertEqual(bearish.market_direction, "bearish")
+        self.assertNotIn(
+            "No deterministic directional signal was detected.", bullish.reasoning_details
+        )
+        self.assertNotIn(
+            "No deterministic directional signal was detected.", bearish.reasoning_details
         )
 
     def test_applies_gold_specific_rules(self) -> None:
