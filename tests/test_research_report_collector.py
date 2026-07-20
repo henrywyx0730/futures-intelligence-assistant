@@ -5,6 +5,7 @@ from pathlib import Path
 import unittest
 
 from futures_intelligence.collectors.research_report import ResearchReportCollector
+from futures_intelligence.fetchers import FetchedResearchReport, HuataiFetchResult
 
 
 FIXTURE_DIRECTORY = Path(__file__).parent / "fixtures"
@@ -67,6 +68,38 @@ class ResearchReportCollectorTests(unittest.TestCase):
         )
 
         self.assertEqual(collector.collect(), [])
+
+    def test_normalizes_structured_huatai_reports_without_source_scope_commodities(self) -> None:
+        report = FetchedResearchReport(
+            title="Huatai outlook",
+            published_time=PUBLISHED_TIME,
+            content="Abstract and core viewpoints.",
+            url="https://htfc.com/main/yjzx/ssrdph/report.shtml",
+            report_type="Strategy",
+            author="Analyst",
+        )
+
+        class StructuredFetcher:
+            def fetch_reports(self) -> HuataiFetchResult:
+                return HuataiFetchResult(1, (report.url,), (report,))
+
+        collector = ResearchReportCollector(
+            None,
+            source="Huatai Futures",
+            category=("macro",),
+            commodities=("crude_oil",),
+            regions=("China",),
+            reliability_score=5,
+            structured_fetcher=StructuredFetcher(),
+        )
+
+        item = collector.collect()[0]
+
+        self.assertEqual(item.source, "Huatai Futures")
+        self.assertEqual(item.published_time, PUBLISHED_TIME)
+        self.assertEqual(item.url, report.url)
+        self.assertEqual(item.commodities, ())
+        self.assertEqual(item.metadata, {"report_type": "Strategy", "author": "Analyst"})
 
 
 if __name__ == "__main__":

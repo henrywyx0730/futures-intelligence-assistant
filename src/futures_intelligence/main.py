@@ -8,6 +8,8 @@ from pathlib import Path
 
 from futures_intelligence.analyst import AnalystRouter, LLMCandidateSelector, LLMAnalyst
 from futures_intelligence.analyst.llm import _openai_client_for_smoke_test
+from futures_intelligence.collectors.research_report import ResearchReportCollector
+from futures_intelligence.fetchers import HuataiFuturesReportFetcher
 from futures_intelligence.models import MarketAnalysis, MarketInformation
 from futures_intelligence.processing.ranker import InformationRanker
 from futures_intelligence.services import MorningBriefService
@@ -27,6 +29,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SMOKE_TEST_REPORT_PATH = (
     PROJECT_ROOT / "data" / "research_reports" / "sample_crude_oil_outlook.txt"
 )
+HTFC_LISTING_URL = "https://htfc.com/main/yjzx/ssrdph/index.shtml"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -39,6 +42,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_llm_smoke_test()
     if arguments.command == "llm-routing-smoke-test":
         return _run_llm_routing_smoke_test()
+    if arguments.command == "htfc-report-smoke-test":
+        return _run_htfc_report_smoke_test()
     return 1
 
 
@@ -57,6 +62,10 @@ def _parse_arguments(argv: list[str] | None) -> argparse.Namespace:
         "llm-routing-smoke-test",
         help="Run one strict production-routing OpenAI smoke test.",
     )
+    commands.add_parser(
+        "htfc-report-smoke-test",
+        help="Fetch and normalize at most one official Huatai Futures HTML report.",
+    )
     return parser.parse_args(argv)
 
 
@@ -69,6 +78,73 @@ def _run_morning_brief() -> None:
     print(brief)
     if service.health_report is not None:
         _print_health_status(service.health_report)
+
+
+def _run_htfc_report_smoke_test(
+    fetcher: HuataiFuturesReportFetcher | None = None,
+) -> int:
+    """Run one bounded, non-persistent HTML-only Huatai report smoke test."""
+    fetcher = fetcher or HuataiFuturesReportFetcher(HTFC_LISTING_URL, max_reports=1)
+    collector = ResearchReportCollector(
+        content_path=None,
+        source="Huatai Futures",
+        category=("macro", "energy", "metals", "chemical", "financial_futures"),
+        regions=("China",),
+        reliability_score=5,
+        structured_fetcher=fetcher,
+    )
+    try:
+        information = collector.collect()
+    except (OSError, RuntimeError, ValueError) as error:
+        print(f"Huatai Futures report smoke test failed: {_htfc_error_message(error)}")
+        return 1
+    result = collector.last_fetch_result
+    discovery = getattr(result, "discovery", None) if result is not None else None
+    html_count = len(discovery.html_detail_links) if discovery is not None else (
+        result.discovered_link_count if result is not None else 0
+    )
+    pdf_count = len(discovery.pdf_attachment_links) if discovery is not None else 0
+    unsupported_count = len(discovery.unsupported_links) if discovery is not None else 0
+    print(f"Discovered HTML detail links: {html_count}")
+    print(f"Discovered PDF attachments: {pdf_count}")
+    print(f"Unsupported links skipped: {unsupported_count}")
+    if result is None or not result.selected_urls or not information:
+        if pdf_count:
+            print(
+                "Huatai Futures report smoke test failed: the official listing "
+                "currently exposes PDF attachments but no usable HTML detail links; "
+                "PDF parsing is intentionally disabled."
+            )
+        else:
+            print("Huatai Futures report smoke test failed: no usable HTML detail was found.")
+        return 1
+    item = information[0]
+    print("Huatai Futures report smoke test succeeded.")
+    print(f"Discovered Link Count: {result.discovered_link_count}")
+    print(f"Selected Detail URL: {result.selected_urls[0]}")
+    print(f"Title: {item.title}")
+    print(f"Published Time: {item.published_time.isoformat()}")
+    print(f"Report Type: {item.metadata.get('report_type', 'unavailable')}")
+    print(f"Author: {item.metadata.get('author', 'unavailable')}")
+    print(f"Content Character Count: {len(item.content)}")
+    print(f"Content Preview: {item.content[:240]}")
+    return 0
+
+
+def _htfc_error_message(error: Exception) -> str:
+    """Add a safe direct-proxy retry hint only for tunnel failures."""
+    message = str(error)
+    lowered = message.lower()
+    tunnel_failure = "tunnel" in lowered and (
+        "502" in lowered or "bad gateway" in lowered
+    )
+    if tunnel_failure or ("proxy" in lowered and "502" in lowered):
+        return (
+            f"{message}; if the proxy tunnel is unavailable, retry with "
+            "NO_PROXY=htfc.com,www.htfc.com "
+            "no_proxy=htfc.com,www.htfc.com"
+        )
+    return message
 
 
 def _run_llm_smoke_test(

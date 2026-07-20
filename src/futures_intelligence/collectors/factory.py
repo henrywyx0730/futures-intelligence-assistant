@@ -10,6 +10,7 @@ from futures_intelligence.collectors.market_data import MarketDataCollector
 from futures_intelligence.collectors.official_data import OfficialDataCollector
 from futures_intelligence.collectors.research_report import ResearchReportCollector
 from futures_intelligence.collectors.rss import RSSCollector
+from futures_intelligence.fetchers import HuataiFuturesReportFetcher
 
 
 class CollectorFactory:
@@ -32,6 +33,18 @@ class CollectorFactory:
                 reliability_score=source_config.get("reliability_score", 3),
             )
         if source_type == "research_report":
+            if source_config.get("provider") == "huatai_futures":
+                return ResearchReportCollector(
+                    content_path=None,
+                    source=_optional_name(source_config) or "Huatai Futures",
+                    category=_metadata_tuple(source_config, "category"),
+                    regions=_metadata_tuple(source_config, "regions"),
+                    reliability_score=source_config.get("reliability_score", 3),
+                    structured_fetcher=HuataiFuturesReportFetcher(
+                        _required_research_listing_url(source_config),
+                        max_reports=_max_reports(source_config),
+                    ),
+                )
             content_path = _required_local_content_path(source_config)
             return ResearchReportCollector(
                 content_path=content_path,
@@ -101,6 +114,22 @@ def _required_local_content_path(source_config: Mapping[str, Any]) -> str:
             "Research report source configuration requires a local content_path"
         )
     return path
+
+
+def _required_research_listing_url(source_config: Mapping[str, Any]) -> str:
+    """Return an explicit HTTPS listing URL for a source-specific report fetcher."""
+    url = source_config.get("url")
+    if not isinstance(url, str) or not url.strip().startswith(("https://", "http://")):
+        raise ValueError("Research report source configuration requires an http(s) url")
+    return url.strip()
+
+
+def _max_reports(source_config: Mapping[str, Any]) -> int:
+    """Return a small positive per-source fetch bound."""
+    value = source_config.get("max_reports", 3)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise ValueError("max_reports must be a positive integer")
+    return value
 
 
 def _required_local_official_data_path(source_config: Mapping[str, Any]) -> str:

@@ -8,6 +8,7 @@ from futures_intelligence.collectors.market_data import MarketDataCollector
 from futures_intelligence.collectors.official_data import OfficialDataCollector
 from futures_intelligence.collectors.research_report import ResearchReportCollector
 from futures_intelligence.collectors.rss import RSSCollector
+from futures_intelligence.fetchers import HuataiFuturesReportFetcher
 
 
 FIXTURE_DIRECTORY = Path(__file__).parent / "fixtures"
@@ -81,6 +82,26 @@ class CollectorFactoryTests(unittest.TestCase):
                     "url": "https://example.com/report.html",
                 }
             )
+
+    def test_creates_disabled_by_default_huatai_collector_when_explicitly_enabled(self) -> None:
+        collector = CollectorFactory.create(
+            {
+                "name": "Huatai Futures",
+                "source_type": "research_report",
+                "provider": "huatai_futures",
+                "enabled": True,
+                "url": "https://htfc.com/main/yjzx/ssrdph/index.shtml",
+                "max_reports": 3,
+                "category": ["macro"],
+                "regions": ["China"],
+                "reliability_score": 5,
+            }
+        )
+
+        self.assertIsInstance(collector, ResearchReportCollector)
+        assert isinstance(collector, ResearchReportCollector)
+        self.assertIsInstance(collector.structured_fetcher, HuataiFuturesReportFetcher)
+        self.assertEqual(collector.commodities, ())
 
     def test_creates_official_data_collector(self) -> None:
         collector = CollectorFactory.create(

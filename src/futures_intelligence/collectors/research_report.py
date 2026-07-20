@@ -8,6 +8,7 @@ from pathlib import Path
 
 from futures_intelligence.collectors.base import BaseCollector
 from futures_intelligence.fetchers import (
+    HuataiFetchResult,
     LocalFileResearchReportFetcher,
     ResearchReportFetcher,
 )
@@ -19,7 +20,7 @@ class ResearchReportCollector(BaseCollector):
 
     def __init__(
         self,
-        content_path: str | Path,
+        content_path: str | Path | None,
         source: str,
         title: str | None = None,
         published_time: datetime | None = None,
@@ -28,8 +29,9 @@ class ResearchReportCollector(BaseCollector):
         regions: tuple[str, ...] = (),
         reliability_score: int = 3,
         fetcher: ResearchReportFetcher | None = None,
+        structured_fetcher: object | None = None,
     ) -> None:
-        self.content_path = Path(content_path)
+        self.content_path = Path(content_path) if content_path is not None else None
         self.source = source
         self.title = title
         self.published_time = published_time
@@ -37,10 +39,20 @@ class ResearchReportCollector(BaseCollector):
         self.commodities = commodities
         self.regions = regions
         self.reliability_score = reliability_score
-        self.fetcher = fetcher or LocalFileResearchReportFetcher(self.content_path)
+        self.fetcher = fetcher or (
+            LocalFileResearchReportFetcher(self.content_path)
+            if self.content_path is not None
+            else None
+        )
+        self.structured_fetcher = structured_fetcher
+        self.last_fetch_result: HuataiFetchResult | None = None
 
     def collect(self) -> list[MarketInformation]:
         """Load a local text or HTML report into one normalized item."""
+        if self.structured_fetcher is not None:
+            return self._collect_structured_reports()
+        if self.fetcher is None or self.content_path is None:
+            return []
         raw_content = self.fetcher.fetch()
         if raw_content is None:
             return []
@@ -70,6 +82,40 @@ class ResearchReportCollector(BaseCollector):
                 reliability_score=self.reliability_score,
                 url=self.content_path.resolve().as_uri(),
             )
+        ]
+
+    def _collect_structured_reports(self) -> list[MarketInformation]:
+        """Normalize source-specific HTML report records without changing local behavior."""
+        fetch_reports = getattr(self.structured_fetcher, "fetch_reports", None)
+        if not callable(fetch_reports):
+            return []
+        result = fetch_reports()
+        if not isinstance(result, HuataiFetchResult):
+            return []
+        self.last_fetch_result = result
+        return [
+            MarketInformation(
+                title=report.title,
+                source=self.source,
+                source_type="research_report",
+                published_time=report.published_time,
+                content=report.content,
+                category=self.category,
+                commodities=(),
+                regions=self.regions,
+                reliability_score=self.reliability_score,
+                url=report.url,
+                metadata={
+                    key: value
+                    for key, value in (
+                        ("report_type", report.report_type),
+                        ("author", report.author),
+                    )
+                    if value is not None
+                },
+            )
+            for report in result.reports
+            if report.content.strip()
         ]
 
 

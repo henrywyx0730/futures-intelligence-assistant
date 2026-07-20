@@ -19,9 +19,11 @@ sources:
 
       - name: Huatai Futures
         source_type: research_report
+        provider: huatai_futures
         priority: high
         enabled: false
-        url: null
+        url: https://htfc.com/main/yjzx/ssrdph/index.shtml
+        max_reports: 3
         category:
           - macro
           - energy

@@ -66,6 +66,20 @@ class ConfigurationLoaderTests(unittest.TestCase):
             sources_text,
         )
 
+    def test_huatai_html_report_source_is_disabled_by_default(self) -> None:
+        sources_text = CONFIGURATION_FILES["sources"].read_text(encoding="utf-8")
+
+        self.assertIn(
+            "      - name: Huatai Futures\n"
+            "        source_type: research_report\n"
+            "        provider: huatai_futures\n"
+            "        priority: high\n"
+            "        enabled: false\n"
+            "        url: https://htfc.com/main/yjzx/ssrdph/index.shtml\n"
+            "        max_reports: 3",
+            sources_text,
+        )
+
     def test_default_source_registry_matches_factory_capabilities(self) -> None:
         entries = _source_entries_from_registry_text()
 

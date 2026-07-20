@@ -16,7 +16,13 @@ from futures_intelligence.main import (
     _parse_arguments,
     _run_llm_routing_smoke_test,
     _run_llm_smoke_test,
+    _run_htfc_report_smoke_test,
     main,
+)
+from futures_intelligence.fetchers import (
+    FetchedResearchReport,
+    HuataiFetchResult,
+    HuataiListingDiscovery,
 )
 from futures_intelligence.models import MarketAnalysis, MarketInformation
 from futures_intelligence.utils.health import HealthReport
@@ -116,12 +122,93 @@ class MainTests(unittest.TestCase):
             _parse_arguments(["llm-routing-smoke-test"]).command,
             "llm-routing-smoke-test",
         )
+        self.assertEqual(
+            _parse_arguments(["htfc-report-smoke-test"]).command,
+            "htfc-report-smoke-test",
+        )
 
         output = StringIO()
         with self.assertRaises(SystemExit), redirect_stdout(output):
             _parse_arguments(["--help"])
         self.assertIn("llm-smoke-test", output.getvalue())
         self.assertIn("llm-routing-smoke-test", output.getvalue())
+        self.assertIn("htfc-report-smoke-test", output.getvalue())
+
+    def test_runs_mocked_huatai_report_smoke_test_without_pipeline_side_effects(self) -> None:
+        report = FetchedResearchReport(
+            title="Huatai report",
+            published_time=datetime(2026, 7, 20, tzinfo=timezone.utc),
+            content="Normalized HTML report content.",
+            url="https://htfc.com/main/yjzx/ssrdph/report-one.shtml",
+            report_type="Strategy",
+            author="Analyst",
+        )
+        fetcher = Mock()
+        fetcher.fetch_reports.return_value = HuataiFetchResult(
+            discovered_link_count=2,
+            selected_urls=(report.url,),
+            reports=(report,),
+            discovery=HuataiListingDiscovery(
+                html_detail_links=(report.url,),
+                pdf_attachment_links=("https://htfc.com/wz_upload/report.pdf",),
+                unsupported_links=("https://example.com/nope",),
+            ),
+        )
+        output = StringIO()
+
+        with redirect_stdout(output):
+            exit_code = _run_htfc_report_smoke_test(fetcher=fetcher)  # type: ignore[arg-type]
+
+        self.assertEqual(exit_code, 0)
+        fetcher.fetch_reports.assert_called_once_with()
+        self.assertIn("Discovered HTML detail links: 1", output.getvalue())
+        self.assertIn("Discovered PDF attachments: 1", output.getvalue())
+        self.assertIn("Unsupported links skipped: 1", output.getvalue())
+        self.assertIn("Huatai report", output.getvalue())
+
+    def test_huatai_pdf_only_smoke_test_reports_precise_failure(self) -> None:
+        fetcher = Mock()
+        fetcher.fetch_reports.return_value = HuataiFetchResult(
+            discovered_link_count=0,
+            selected_urls=(),
+            reports=(),
+            discovery=HuataiListingDiscovery(
+                pdf_attachment_links=("https://htfc.com/wz_upload/report.pdf",),
+            ),
+        )
+        output = StringIO()
+
+        with redirect_stdout(output):
+            exit_code = _run_htfc_report_smoke_test(fetcher=fetcher)  # type: ignore[arg-type]
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Discovered HTML detail links: 0", output.getvalue())
+        self.assertIn("Discovered PDF attachments: 1", output.getvalue())
+        self.assertIn("PDF parsing is intentionally disabled", output.getvalue())
+        self.assertNotIn("no usable HTML report was found", output.getvalue())
+
+    def test_huatai_proxy_tunnel_failure_includes_safe_retry_hint(self) -> None:
+        fetcher = Mock()
+        fetcher.fetch_reports.side_effect = OSError("Tunnel connection failed: 502 Bad Gateway")
+        output = StringIO()
+
+        with redirect_stdout(output):
+            exit_code = _run_htfc_report_smoke_test(fetcher=fetcher)  # type: ignore[arg-type]
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("NO_PROXY=htfc.com,www.htfc.com", output.getvalue())
+        self.assertIn("no_proxy=htfc.com,www.htfc.com", output.getvalue())
+
+    def test_huatai_report_smoke_test_returns_nonzero_for_fetch_failure(self) -> None:
+        fetcher = Mock()
+        fetcher.fetch_reports.side_effect = OSError("network unavailable")
+        output = StringIO()
+
+        with redirect_stdout(output):
+            exit_code = _run_htfc_report_smoke_test(fetcher=fetcher)  # type: ignore[arg-type]
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("failed", output.getvalue())
 
     @patch("futures_intelligence.main._run_llm_smoke_test", return_value=1)
     def test_main_dispatches_llm_smoke_test_command(self, smoke_test: Mock) -> None:
