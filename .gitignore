@@ -223,3 +223,8 @@ __marimo__/
 
 # Local LLM usage records
 data/llm_usage.jsonl
+
+# Local morning-brief runtime artifacts
+data/briefs/
+data/health_report.json
+data/market_intelligence_history.json
