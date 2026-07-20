@@ -71,6 +71,7 @@ class MorningBriefServiceTests(unittest.TestCase):
                     "provider": "openai",
                     "model": "test-model",
                     "source_types": ["research_report"],
+                    "min_reliability_score": 4,
                     "max_items_per_run": 2,
                     "usage": {"file_path": "data/test-llm-usage.jsonl"},
                     "pricing": {
@@ -156,6 +157,7 @@ class MorningBriefServiceTests(unittest.TestCase):
         self.assertTrue(service.runtime_configuration.llm.enabled)
         self.assertEqual(service.runtime_configuration.llm.model, "test-model")
         self.assertEqual(service.runtime_configuration.llm.source_types, ("research_report",))
+        self.assertEqual(service.runtime_configuration.llm.min_reliability_score, 4)
         self.assertEqual(service.runtime_configuration.llm.max_items_per_run, 2)
         self.assertEqual(
             service.runtime_configuration.llm.usage.file_path,
@@ -169,6 +171,14 @@ class MorningBriefServiceTests(unittest.TestCase):
             trend_detector.return_value.detect.return_value,
         )
         configure_logger.return_value.info.assert_called()
+        configure_logger.return_value.info.assert_any_call(
+            "LLM routing: %d eligible candidates, %d selected candidates, "
+            "%d rule-based items, maximum %d.",
+            0,
+            0,
+            1,
+            2,
+        )
 
     def test_uses_safe_defaults_for_missing_or_invalid_runtime_settings(self) -> None:
         runtime = _runtime_configuration(
@@ -184,6 +194,7 @@ class MorningBriefServiceTests(unittest.TestCase):
                     "provider": "other",
                     "model": " ",
                     "source_types": [" ", 1],
+                    "min_reliability_score": 0,
                     "max_items_per_run": 0,
                 },
             }
@@ -204,7 +215,8 @@ class MorningBriefServiceTests(unittest.TestCase):
         self.assertEqual(runtime.llm.provider, "other")
         self.assertEqual(runtime.llm.model, "gpt-5.6-luna")
         self.assertEqual(runtime.llm.source_types, ("research_report",))
-        self.assertEqual(runtime.llm.max_items_per_run, 5)
+        self.assertEqual(runtime.llm.min_reliability_score, 4)
+        self.assertEqual(runtime.llm.max_items_per_run, 3)
         self.assertEqual(runtime.llm.usage.file_path, "data/llm_usage.jsonl")
         self.assertEqual(runtime.llm.pricing.model, "gpt-5.6-luna")
 

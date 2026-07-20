@@ -2,12 +2,15 @@
 
 from datetime import datetime, timezone
 import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
 from futures_intelligence.analyst import AnalystRouter, LLMAnalyst, RuleBasedAnalyst
 from futures_intelligence.models import MarketInformation
+from futures_intelligence.utils.llm_usage import LLMUsageTracker, LLMPricing
 
 
 def make_information(source_type: str) -> MarketInformation:
@@ -53,28 +56,42 @@ class AnalystRouterTests(unittest.TestCase):
 
         self.assertIsInstance(analyst, RuleBasedAnalyst)
 
-    def test_disabled_llm_keeps_research_reports_rule_based(self) -> None:
+    def test_empty_selected_candidates_keep_research_reports_rule_based(self) -> None:
         llm_analyst = LLMAnalyst()
         router = AnalystRouter(
-            llm_enabled=False,
-            llm_source_types=("research_report",),
             llm_analyst=llm_analyst,
+            llm_candidates=(),
+            max_llm_items=3,
         )
 
         self.assertIsInstance(
             router.select_analyst(make_information("research_report")), RuleBasedAnalyst
         )
 
-    def test_enabled_llm_routes_only_configured_research_reports(self) -> None:
-        llm_analyst = LLMAnalyst()
+    def test_routes_only_the_selected_object_instance_to_llm(self) -> None:
+        client = Mock()
+        client.responses.create.return_value = SimpleNamespace(
+            output_text=json.dumps(
+                {
+                    "summary": "LLM summary.",
+                    "market_direction": "neutral",
+                    "confidence_score": 25,
+                    "reasoning_details": ["Mocked response."],
+                }
+            )
+        )
+        selected = make_information("research_report")
+        equal_but_unselected = make_information("research_report")
+        llm_analyst = LLMAnalyst(client=client, max_items_per_run=3)
         router = AnalystRouter(
-            llm_enabled=True,
-            llm_source_types=("research_report",),
             llm_analyst=llm_analyst,
+            llm_candidates=(selected,),
+            max_llm_items=3,
         )
 
-        self.assertIs(
-            router.select_analyst(make_information("research_report")), llm_analyst
+        self.assertIs(router.select_analyst(selected), llm_analyst)
+        self.assertIsInstance(
+            router.select_analyst(equal_but_unselected), RuleBasedAnalyst
         )
         for source_type in ("rss", "market_data", "official_data", "future_source"):
             with self.subTest(source_type=source_type):
@@ -95,15 +112,17 @@ class AnalystRouterTests(unittest.TestCase):
             )
         )
         llm_analyst = LLMAnalyst(client=client, max_items_per_run=1)
+        first_report = make_information("research_report")
+        second_report = make_information("research_report")
         router = AnalystRouter(
-            llm_enabled=True,
-            llm_source_types=("research_report",),
             llm_analyst=llm_analyst,
+            llm_candidates=(first_report, second_report),
+            max_llm_items=1,
         )
         information = [
-            make_information("research_report"),
+            first_report,
             make_information("rss"),
-            make_information("research_report"),
+            second_report,
         ]
 
         analyses = router.analyze(information)
@@ -113,6 +132,101 @@ class AnalystRouterTests(unittest.TestCase):
         self.assertEqual(analyses[0].summary, "LLM summary.")
         self.assertIn("Detected commodity focus: Gold.", analyses[1].summary)
         self.assertIn("Detected commodity focus: Gold.", analyses[2].summary)
+
+    def test_duplicate_selected_instance_falls_back_without_a_second_llm_call(self) -> None:
+        client = Mock()
+        client.responses.create.return_value = SimpleNamespace(
+            output_text=json.dumps(
+                {
+                    "summary": "LLM summary.",
+                    "market_direction": "neutral",
+                    "confidence_score": 25,
+                    "reasoning_details": ["Mocked response."],
+                }
+            )
+        )
+        selected = make_information("research_report")
+        router = AnalystRouter(
+            llm_analyst=LLMAnalyst(client=client, max_items_per_run=3),
+            llm_candidates=(selected,),
+            max_llm_items=3,
+        )
+
+        analyses = router.analyze([selected, selected])
+
+        client.responses.create.assert_called_once()
+        self.assertEqual([analysis.market_information for analysis in analyses], [selected, selected])
+        self.assertEqual(analyses[0].summary, "LLM summary.")
+        self.assertIn("Detected commodity focus: Gold.", analyses[1].summary)
+
+    def test_failed_selected_llm_call_falls_back_to_rule_based_analysis(self) -> None:
+        client = Mock()
+        client.responses.create.side_effect = RuntimeError("unavailable")
+        selected = make_information("research_report")
+        router = AnalystRouter(
+            llm_analyst=LLMAnalyst(client=client, max_items_per_run=3),
+            llm_candidates=(selected,),
+            max_llm_items=3,
+        )
+
+        analysis = router.analyze([selected])[0]
+
+        client.responses.create.assert_called_once()
+        self.assertIs(analysis.market_information, selected)
+        self.assertIn("Detected commodity focus: Gold.", analysis.summary)
+
+    def test_selected_production_call_writes_one_usage_record(self) -> None:
+        with TemporaryDirectory() as directory:
+            client = Mock()
+            client.responses.create.return_value = SimpleNamespace(
+                id="resp_test_123",
+                model="gpt-5.6-luna",
+                usage=SimpleNamespace(
+                    input_tokens=10,
+                    input_tokens_details=SimpleNamespace(
+                        cached_tokens=0,
+                        cache_write_tokens=0,
+                    ),
+                    output_tokens=5,
+                    output_tokens_details=SimpleNamespace(reasoning_tokens=0),
+                    total_tokens=15,
+                ),
+                output_text=json.dumps(
+                    {
+                        "summary": "LLM summary.",
+                        "market_direction": "neutral",
+                        "confidence_score": 25,
+                        "reasoning_details": ["Mocked response."],
+                    }
+                ),
+            )
+            tracker_path = Path(directory) / "llm_usage.jsonl"
+            tracker = LLMUsageTracker(
+                tracker_path,
+                LLMPricing(
+                    model="gpt-5.6-luna",
+                    effective_date="2026-07-19",
+                    input_per_million_usd=1.0,
+                    cached_input_per_million_usd=0.1,
+                    output_per_million_usd=6.0,
+                    cache_write_multiplier=1.25,
+                ),
+            )
+            selected = make_information("research_report")
+            router = AnalystRouter(
+                llm_analyst=LLMAnalyst(
+                    client=client,
+                    max_items_per_run=3,
+                    usage_tracker=tracker,
+                ),
+                llm_candidates=(selected,),
+                max_llm_items=3,
+            )
+
+            router.analyze([selected, make_information("rss")])
+
+            client.responses.create.assert_called_once()
+            self.assertEqual(len(tracker_path.read_text(encoding="utf-8").splitlines()), 1)
 
     def test_rejects_non_market_information_values(self) -> None:
         with self.assertRaises(TypeError):

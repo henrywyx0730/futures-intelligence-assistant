@@ -46,7 +46,7 @@ sources:
       - name: Sample Local Research Desk
         source_type: research_report
         priority: medium
-        enabled: true
+        enabled: false
         content_path: data/research_reports/sample_crude_oil_outlook.txt
         title: Sample Crude Oil Outlook
         category:

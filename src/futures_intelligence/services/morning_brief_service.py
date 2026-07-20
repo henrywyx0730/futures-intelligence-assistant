@@ -9,6 +9,7 @@ from typing import Any
 from futures_intelligence.analyst import (
     AggregatedMarketView,
     AnalystRouter,
+    LLMCandidateSelector,
     LLMAnalyst,
     MarketAnalysisAggregator,
 )
@@ -47,7 +48,8 @@ DEFAULT_HISTORY_FILE = "data/market_intelligence_history.json"
 DEFAULT_LLM_PROVIDER = "openai"
 DEFAULT_LLM_MODEL = "gpt-5.6-luna"
 DEFAULT_LLM_SOURCE_TYPES = ("research_report",)
-DEFAULT_LLM_MAX_ITEMS_PER_RUN = 5
+DEFAULT_LLM_MIN_RELIABILITY_SCORE = 4
+DEFAULT_LLM_MAX_ITEMS_PER_RUN = 3
 DEFAULT_LLM_USAGE_FILE = "data/llm_usage.jsonl"
 DEFAULT_LLM_PRICING_EFFECTIVE_DATE = "2026-07-19"
 DEFAULT_LLM_INPUT_PER_MILLION_USD = 1.00
@@ -113,6 +115,7 @@ class LLMSettings:
     provider: str = DEFAULT_LLM_PROVIDER
     model: str = DEFAULT_LLM_MODEL
     source_types: tuple[str, ...] = DEFAULT_LLM_SOURCE_TYPES
+    min_reliability_score: int = DEFAULT_LLM_MIN_RELIABILITY_SCORE
     max_items_per_run: int = DEFAULT_LLM_MAX_ITEMS_PER_RUN
     usage: LLMUsageSettings = field(default_factory=LLMUsageSettings)
     pricing: LLMPricingSettings = field(default_factory=LLMPricingSettings)
@@ -198,10 +201,24 @@ class MorningBriefService:
                 ),
             ),
         )
+        selection = LLMCandidateSelector(
+            enabled=llm_settings.enabled and llm_settings.provider == "openai",
+            source_types=llm_settings.source_types,
+            min_reliability_score=llm_settings.min_reliability_score,
+            max_items_per_run=llm_settings.max_items_per_run,
+        ).select(self.information)
+        logger.info(
+            "LLM routing: %d eligible candidates, %d selected candidates, "
+            "%d rule-based items, maximum %d.",
+            selection.eligible_count,
+            len(selection.selected_items),
+            len(self.information) - len(selection.selected_items),
+            llm_settings.max_items_per_run,
+        )
         self.analyses = AnalystRouter(
-            llm_enabled=llm_settings.enabled and llm_settings.provider == "openai",
-            llm_source_types=llm_settings.source_types,
             llm_analyst=llm_analyst,
+            llm_candidates=selection.selected_items,
+            max_llm_items=llm_settings.max_items_per_run,
         ).analyze(self.information)
         for analysis in self.analyses:
             store_market_analysis(database_path, analysis)
@@ -350,6 +367,12 @@ def _runtime_configuration(value: object) -> RuntimeConfiguration:
                 if isinstance(llm_settings, dict)
                 else None
             ),
+            min_reliability_score=_reliability_score(
+                llm_settings.get("min_reliability_score")
+                if isinstance(llm_settings, dict)
+                else None,
+                DEFAULT_LLM_MIN_RELIABILITY_SCORE,
+            ),
             max_items_per_run=_positive_int(
                 llm_settings.get("max_items_per_run")
                 if isinstance(llm_settings, dict)
@@ -405,6 +428,13 @@ def _runtime_configuration(value: object) -> RuntimeConfiguration:
 def _positive_int(value: object, default: int) -> int:
     """Return a positive integer configuration value or its safe default."""
     if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return default
+
+
+def _reliability_score(value: object, default: int) -> int:
+    """Return a valid source reliability threshold or its safe default."""
+    if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 5:
         return value
     return default
 

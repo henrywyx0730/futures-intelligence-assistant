@@ -19,7 +19,8 @@ runtime:
     model: gpt-5.6-luna
     source_types:
       - research_report
-    max_items_per_run: 5
+    min_reliability_score: 4
+    max_items_per_run: 3
     usage:
       file_path: data/llm_usage.jsonl
     pricing:

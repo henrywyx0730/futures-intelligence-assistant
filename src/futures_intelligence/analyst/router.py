@@ -22,11 +22,11 @@ class AnalystRouter:
         self,
         analyst_overrides: Mapping[str, BaseAnalyst] | None = None,
         *,
-        llm_enabled: bool = False,
-        llm_source_types: Iterable[str] = (),
+        llm_candidates: Iterable[MarketInformation] = (),
         llm_analyst: LLMAnalyst | None = None,
+        max_llm_items: int | None = None,
     ) -> None:
-        """Configure the initial deterministic source-type routing table."""
+        """Configure default analysts and authoritative selected LLM instances."""
         self._default_analyst = RuleBasedAnalyst()
         self._analysts_by_source_type = {
             source_type: self._default_analyst for source_type in ROUTED_SOURCE_TYPES
@@ -40,30 +40,43 @@ class AnalystRouter:
                 }
             )
         self._llm_analyst = llm_analyst
-        if llm_enabled and llm_analyst is not None:
-            for source_type in llm_source_types:
-                if isinstance(source_type, str):
-                    self._analysts_by_source_type[source_type] = llm_analyst
+        self._llm_candidate_ids = {
+            id(item) for item in llm_candidates if isinstance(item, MarketInformation)
+        }
+        if max_llm_items is None and llm_analyst is not None:
+            max_llm_items = llm_analyst.max_items_per_run
+        if max_llm_items is not None and (
+            isinstance(max_llm_items, bool)
+            or not isinstance(max_llm_items, int)
+            or max_llm_items < 1
+        ):
+            raise ValueError("max_llm_items must be a positive integer or None")
+        self._max_llm_items = max_llm_items or 0
 
     def select_analyst(self, information: MarketInformation) -> BaseAnalyst:
         """Return the deterministic analyst for one normalized information item."""
         if not isinstance(information, MarketInformation):
             raise TypeError("information must be a MarketInformation instance")
-        return self._analysts_by_source_type.get(
-            information.source_type,
-            self._default_analyst,
-        )
+        if self._llm_analyst is not None and id(information) in self._llm_candidate_ids:
+            return self._llm_analyst
+        return self._analysts_by_source_type.get(information.source_type, self._default_analyst)
 
     def analyze(self, information: list[MarketInformation]) -> list[MarketAnalysis]:
-        """Analyze items in order while enforcing the configured LLM run limit."""
+        """Analyze items in order with only selected instances eligible for LLM calls."""
         analyses: list[MarketAnalysis] = []
         llm_items_processed = 0
+        processed_candidate_ids: set[int] = set()
         for item in information:
             analyst = self.select_analyst(item)
             if analyst is self._llm_analyst:
-                if llm_items_processed >= self._llm_analyst.max_items_per_run:
+                item_id = id(item)
+                if (
+                    item_id in processed_candidate_ids
+                    or llm_items_processed >= self._max_llm_items
+                ):
                     analyst = self._default_analyst
                 else:
+                    processed_candidate_ids.add(item_id)
                     llm_items_processed += 1
             analyses.extend(analyst.analyze([item]))
         return analyses
