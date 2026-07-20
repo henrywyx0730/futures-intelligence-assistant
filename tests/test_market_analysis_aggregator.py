@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 import unittest
 
-from futures_intelligence.analyst import MarketAnalysisAggregator
+from futures_intelligence.analyst import MarketAnalysisAggregator, RuleBasedAnalyst
 from futures_intelligence.analyst.commodity_matcher import CommodityMatch
 from futures_intelligence.models import MarketAnalysis, MarketInformation
 
@@ -275,6 +275,52 @@ class MarketAnalysisAggregatorTests(unittest.TestCase):
         self.assertEqual([view.commodity_key for view in views], ["crude_oil"])
         self.assertEqual(views[0].overall_direction, "bullish")
         self.assertIn("Observed market movement", " ".join(views[0].reasoning_details))
+
+    def test_uses_scoped_movement_directions_and_evidence_from_one_analysis(self) -> None:
+        information = MarketInformation(
+            title="Gold opens ₹733 higher; Silver gains ₹2,796",
+            source="Test Source",
+            source_type="rss",
+            published_time=datetime(2026, 7, 19, tzinfo=timezone.utc),
+            content="Market update.",
+            reliability_score=4,
+        )
+        analysis = RuleBasedAnalyst().analyze([information])[0]
+
+        views = self.aggregator.aggregate_by_commodity([analysis])
+        views_by_key = {view.commodity_key: view for view in views}
+
+        self.assertIs(analysis.market_information, information)
+        self.assertEqual(analysis.market_direction, "bullish")
+        self.assertEqual(views_by_key["gold"].overall_direction, "bullish")
+        self.assertEqual(views_by_key["silver"].overall_direction, "bullish")
+        self.assertIn("Gold opens ₹733 higher", " ".join(views_by_key["gold"].reasoning_details))
+        self.assertIn("Silver gains ₹2,796", " ".join(views_by_key["silver"].reasoning_details))
+        self.assertNotIn("Silver", " ".join(views_by_key["gold"].reasoning_details))
+        self.assertNotIn("Gold", " ".join(views_by_key["silver"].reasoning_details))
+
+    def test_scopes_opposite_commodity_movements_without_changing_global_aggregate(self) -> None:
+        information = MarketInformation(
+            title="Gold gains while Silver falls",
+            source="Test Source",
+            source_type="official_data",
+            published_time=datetime(2026, 7, 19, tzinfo=timezone.utc),
+            content="Market update.",
+            reliability_score=5,
+        )
+        analysis = RuleBasedAnalyst().analyze([information])[0]
+
+        aggregate = self.aggregator.aggregate([analysis])
+        views_by_key = {
+            view.commodity_key: view
+            for view in self.aggregator.aggregate_by_commodity([analysis])
+        }
+
+        self.assertEqual(aggregate.overall_market_direction, "neutral")
+        self.assertEqual(views_by_key["gold"].overall_direction, "bullish")
+        self.assertEqual(views_by_key["silver"].overall_direction, "bearish")
+        self.assertIn("Gold gains", " ".join(views_by_key["gold"].reasoning_details))
+        self.assertIn("Silver falls", " ".join(views_by_key["silver"].reasoning_details))
 
     def test_source_reliability_and_type_weight_directional_signals(self) -> None:
         view = self.aggregator.aggregate(

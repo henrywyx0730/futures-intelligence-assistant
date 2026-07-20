@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from futures_intelligence.analyst.commodity_matcher import CommodityMatch, CommodityMatcher
+from futures_intelligence.analyst.market_movement import MarketMovementDetector
 from futures_intelligence.models import MarketAnalysis
 
 
@@ -38,12 +39,22 @@ class CommodityMarketView:
     reasoning_details: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class _CommodityContribution:
+    """One immutable commodity-scoped interpretation of an existing analysis."""
+
+    analysis: MarketAnalysis
+    direction: str
+    reasoning_details: tuple[str, ...]
+
+
 class MarketAnalysisAggregator:
     """Combine deterministic MarketAnalysis outputs into one market view."""
 
     def __init__(self, commodity_matcher: CommodityMatcher | None = None) -> None:
         """Use the shared article-level matcher for optional commodity grouping."""
         self._commodity_matcher = commodity_matcher or CommodityMatcher()
+        self._market_movement_detector = MarketMovementDetector()
 
     def aggregate(self, analyses: list[MarketAnalysis]) -> AggregatedMarketView:
         """Return a confidence-weighted direction and combined reasoning details."""
@@ -115,7 +126,13 @@ class MarketAnalysisAggregator:
             for definition in self._commodity_matcher.commodity_ordered_matches
         )
         return tuple(
-            _commodity_market_view(match, group_analyses, configured_labels, self)
+            _commodity_market_view(
+                match,
+                group_analyses,
+                configured_labels,
+                self._market_movement_detector,
+                self._commodity_matcher,
+            )
             for match, group_analyses, _, _ in ordered_groups
         )
 
@@ -188,22 +205,121 @@ def _commodity_market_view(
     match: CommodityMatch,
     analyses: list[MarketAnalysis],
     configured_labels: tuple[str, ...],
-    aggregator: MarketAnalysisAggregator,
+    movement_detector: MarketMovementDetector,
+    commodity_matcher: CommodityMatcher,
 ) -> CommodityMarketView:
     """Build one scoped view using the existing aggregate calculations unchanged."""
-    aggregate = aggregator.aggregate(analyses)
+    contributions = tuple(
+        _commodity_contribution(analysis, match, movement_detector, commodity_matcher)
+        for analysis in analyses
+    )
+    overall_direction, confidence_score, reasoning_details = _aggregate_contributions(
+        contributions
+    )
     return CommodityMarketView(
         commodity_key=match.commodity_key,
         commodity_label=match.commodity_label,
         analysis_count=len(analyses),
-        overall_direction=aggregate.overall_market_direction,
-        confidence_score=aggregate.aggregated_confidence_score,
+        overall_direction=overall_direction,
+        confidence_score=confidence_score,
         reasoning_details=_commodity_reasoning_details(
-            aggregate.reasoning_details,
+            reasoning_details,
             match.commodity_label,
             configured_labels,
         ),
     )
+
+
+def _commodity_contribution(
+    analysis: MarketAnalysis,
+    match: CommodityMatch,
+    movement_detector: MarketMovementDetector,
+    commodity_matcher: CommodityMatcher,
+) -> _CommodityContribution:
+    """Apply a resolved commodity movement without changing the analysis object."""
+    signals = movement_detector.detect_by_commodity(
+        analysis.market_information,
+        commodity_matcher.match(analysis.market_information),
+    )
+    signal = next(
+        (signal for signal in signals if signal.commodity_key == match.commodity_key),
+        None,
+    )
+    if signal is None or signal.priority == 0:
+        return _CommodityContribution(
+            analysis=analysis,
+            direction=analysis.market_direction,
+            reasoning_details=analysis.reasoning_details,
+        )
+    return _CommodityContribution(
+        analysis=analysis,
+        direction=signal.direction,
+        reasoning_details=tuple(
+            detail
+            for detail in analysis.reasoning_details
+            if not detail.startswith("Observed market movement:")
+        )
+        + (f"Observed market movement: {signal.evidence}.",),
+    )
+
+
+def _aggregate_contributions(
+    contributions: tuple[_CommodityContribution, ...],
+) -> tuple[str, int, tuple[str, ...]]:
+    """Reuse global source-aware weighting for immutable commodity contributions."""
+    bullish_weight = sum(
+        _signal_weight(contribution.analysis)
+        for contribution in contributions
+        if contribution.direction == "bullish"
+    )
+    bearish_weight = sum(
+        _signal_weight(contribution.analysis)
+        for contribution in contributions
+        if contribution.direction == "bearish"
+    )
+    source_weights = [_source_weight(contribution.analysis) for contribution in contributions]
+    overall_direction = _overall_direction(bullish_weight, bearish_weight)
+    return (
+        overall_direction,
+        sum(
+            contribution.analysis.confidence_score * source_weight
+            for contribution, source_weight in zip(contributions, source_weights)
+        )
+        // sum(source_weights),
+        _combined_contribution_reasoning(contributions, overall_direction),
+    )
+
+
+def _combined_contribution_reasoning(
+    contributions: tuple[_CommodityContribution, ...],
+    overall_direction: str,
+) -> tuple[str, ...]:
+    """Combine only final-direction commodity contribution reasoning in input order."""
+    if overall_direction in {"bullish", "bearish"}:
+        supporting = tuple(
+            contribution
+            for contribution in contributions
+            if contribution.direction == overall_direction
+        )
+    elif any(contribution.direction == "bullish" for contribution in contributions) and any(
+        contribution.direction == "bearish" for contribution in contributions
+    ):
+        return ("Conflicting bullish and bearish directional signals were detected.",)
+    else:
+        supporting = tuple(
+            contribution
+            for contribution in contributions
+            if contribution.direction == "neutral"
+        )
+
+    combined: list[str] = []
+    for contribution in supporting:
+        for detail in contribution.reasoning_details:
+            if _is_source_scope_detail(detail):
+                continue
+            if detail not in combined:
+                combined.append(detail)
+    return tuple(combined)
 
 
 def _commodity_reasoning_details(

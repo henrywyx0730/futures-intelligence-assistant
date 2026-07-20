@@ -31,6 +31,32 @@ class MarketMovementDetectorTests(unittest.TestCase):
         information = make_information(title, content)
         return self.detector.detect(information, self.matcher.match(information))
 
+    def detect_by_commodity(self, title: str, content: str = "") -> dict[str, object]:
+        """Return deterministic commodity-scoped movement signals by key."""
+        information = make_information(title, content)
+        return {
+            signal.commodity_key: signal
+            for signal in self.detector.detect_by_commodity(
+                information, self.matcher.match(information)
+            )
+        }
+
+    def test_retains_complete_numeric_movement_evidence(self) -> None:
+        cases = (
+            ("WTI Futures is up 2.39%", "up 2.39%"),
+            ("WTI Futures is up +2.39%", "up +2.39%"),
+            ("Oil jumped 2.5%", "jumped 2.5%"),
+            ("Gold opens ₹733 higher", "opens ₹733 higher"),
+            ("Silver gains ₹2,796", "gains ₹2,796"),
+            ("Copper is down -1.7%", "down -1.7%"),
+        )
+
+        for title, expected_evidence in cases:
+            with self.subTest(title=title):
+                evidence = self.detect(title).evidence
+                self.assertIn(expected_evidence, evidence)
+                self.assertNotEqual(evidence, "39%")
+
     def test_detects_bullish_observed_price_movements(self) -> None:
         cases = (
             "WTI Futures is up 2.39%",
@@ -99,6 +125,30 @@ class MarketMovementDetectorTests(unittest.TestCase):
 
         self.assertEqual(signal.direction, "bullish")
         self.assertIn("Oil rises", signal.evidence)
+
+    def test_resolves_different_movements_per_commodity(self) -> None:
+        signals = self.detect_by_commodity("Gold gains while Silver falls")
+
+        self.assertEqual(signals["gold"].direction, "bullish")
+        self.assertEqual(signals["silver"].direction, "bearish")
+        self.assertIn("Gold gains", signals["gold"].evidence)
+        self.assertIn("Silver falls", signals["silver"].evidence)
+        self.assertEqual(self.detect("Gold gains while Silver falls").direction, "neutral")
+
+    def test_applies_a_shared_movement_to_each_subject_commodity(self) -> None:
+        signals = self.detect_by_commodity("Gold and Silver gain")
+
+        self.assertEqual(signals["gold"].direction, "bullish")
+        self.assertEqual(signals["silver"].direction, "bullish")
+
+    def test_excludes_unchanged_and_cross_commodity_movement(self) -> None:
+        signals = self.detect_by_commodity("Oil rises while Gold falls; Silver is unchanged")
+
+        self.assertEqual(signals["crude_oil"].direction, "bullish")
+        self.assertEqual(signals["gold"].direction, "bearish")
+        self.assertNotIn("silver", signals)
+        self.assertNotIn("Gold", signals["crude_oil"].evidence)
+        self.assertNotIn("Oil", signals["gold"].evidence)
 
 
 if __name__ == "__main__":
