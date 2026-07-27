@@ -24,6 +24,19 @@ sources:
         enabled: false
         url: https://htfc.com/main/yjzx/ssrdph/index.shtml
         max_reports: 3
+        pdf_extraction:
+          socket_timeout_seconds: 10
+          download_deadline_seconds: 30
+          max_response_bytes: 20971520
+          max_redirects: 3
+          max_selected_pdfs: 3
+          max_pages: 50
+          max_content_stream_bytes_per_page: 8388608
+          max_content_stream_bytes: 67108864
+          max_extracted_characters_per_page: 20000
+          max_extracted_characters: 250000
+          parser_deadline_seconds: 20
+          minimum_meaningful_characters: 20
         category:
           - macro
           - energy

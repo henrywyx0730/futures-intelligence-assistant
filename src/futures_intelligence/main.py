@@ -9,7 +9,15 @@ from pathlib import Path
 from futures_intelligence.analyst import AnalystRouter, LLMCandidateSelector, LLMAnalyst
 from futures_intelligence.analyst.llm import _openai_client_for_smoke_test
 from futures_intelligence.collectors.research_report import ResearchReportCollector
-from futures_intelligence.fetchers import HuataiFuturesReportFetcher
+from futures_intelligence.config.loader import CONFIGURATION_FILES, load_yaml_file
+from futures_intelligence.fetchers import (
+    HuataiFuturesReportFetcher,
+    HuataiPdfAttachment,
+    HuataiPdfDownloadLimits,
+    HuataiPdfParseLimits,
+    HuataiPdfTextExtractor,
+    HuataiReportListingItem,
+)
 from futures_intelligence.models import MarketAnalysis, MarketInformation
 from futures_intelligence.processing.ranker import InformationRanker
 from futures_intelligence.services import MorningBriefService
@@ -44,6 +52,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_llm_routing_smoke_test()
     if arguments.command == "htfc-report-smoke-test":
         return _run_htfc_report_smoke_test()
+    if arguments.command == "htfc-pdf-smoke-test":
+        return _run_htfc_pdf_smoke_test()
     return 1
 
 
@@ -65,6 +75,10 @@ def _parse_arguments(argv: list[str] | None) -> argparse.Namespace:
     commands.add_parser(
         "htfc-report-smoke-test",
         help="Fetch and normalize at most one official Huatai Futures HTML report.",
+    )
+    commands.add_parser(
+        "htfc-pdf-smoke-test",
+        help="Extract text from one official Huatai Futures PDF attachment.",
     )
     return parser.parse_args(argv)
 
@@ -105,9 +119,9 @@ def _run_htfc_report_smoke_test(
     )
     pdf_count = len(discovery.pdf_attachment_links) if discovery is not None else 0
     unsupported_count = len(discovery.unsupported_links) if discovery is not None else 0
-    print(f"Discovered HTML detail links: {html_count}")
-    print(f"Discovered PDF attachments: {pdf_count}")
-    print(f"Unsupported links skipped: {unsupported_count}")
+    print(f"Discovered report HTML detail links: {html_count}")
+    print(f"Discovered report PDF attachments: {pdf_count}")
+    print(f"Ignored non-report links: {unsupported_count}")
     if result is None or not result.selected_urls or not information:
         if pdf_count:
             print(
@@ -129,6 +143,138 @@ def _run_htfc_report_smoke_test(
     print(f"Content Character Count: {len(item.content)}")
     print(f"Content Preview: {item.content[:240]}")
     return 0
+
+
+def _run_htfc_pdf_smoke_test(
+    listing_fetcher: HuataiFuturesReportFetcher | None = None,
+    extractor: HuataiPdfTextExtractor | None = None,
+) -> int:
+    """Run one bounded, non-persistent text-layer PDF extraction smoke test."""
+    listing_fetcher = listing_fetcher or HuataiFuturesReportFetcher(
+        HTFC_LISTING_URL, max_reports=1
+    )
+    try:
+        listing = listing_fetcher.fetch_reports()
+    except (OSError, RuntimeError, ValueError) as error:
+        print(f"Huatai Futures PDF smoke test failed: {_htfc_error_message(error)}")
+        return 1
+    discovery = listing.discovery
+    html_count = len(discovery.html_detail_links) if discovery is not None else 0
+    pdf_items = (
+        tuple(item for item in discovery.report_items if item.link_kind == "pdf_attachment")
+        if discovery is not None
+        else ()
+    )
+    ignored_count = len(discovery.ignored_non_report_links) if discovery is not None else 0
+    print(f"Discovered report HTML detail links: {html_count}")
+    print(f"Discovered report PDF attachments: {len(pdf_items)}")
+    print(f"Ignored non-report links: {ignored_count}")
+    if not pdf_items:
+        print("Huatai Futures PDF smoke test failed: no official PDF attachments were found.")
+        return 1
+    listing_entry = _newest_report_pdf(pdf_items)
+    attachment = HuataiPdfAttachment(
+        listing_entry.canonical_url,
+        listing_entry.listing_title,
+        listing_entry.publication_date,
+        listing_entry.report_type,
+    )
+    try:
+        extractor = extractor or _configured_htfc_pdf_extractor()
+    except (FileNotFoundError, RuntimeError, ValueError, TypeError) as error:
+        print(f"Huatai Futures PDF smoke test failed: invalid PDF configuration: {error}")
+        return 1
+    result = extractor.extract(attachment)
+    if result.extraction_status != "success":
+        print(
+            "Huatai Futures PDF smoke test failed: "
+            f"{result.failure_category or 'extraction_failed'}"
+        )
+        if result.proxy_tunnel_failure:
+            print(
+                "If the proxy tunnel is unavailable, retry with "
+                "NO_PROXY=htfc.com,www.htfc.com "
+                "no_proxy=htfc.com,www.htfc.com"
+            )
+        return 1
+    print("Huatai Futures PDF smoke test succeeded: text layer extracted.")
+    print(f"Selected Canonical PDF URL: {result.canonical_pdf_url}")
+    print(f"Downloaded Byte Count: {result.byte_count}")
+    print(f"Page Count: {result.page_count}")
+    print(f"Title: {result.title or 'unavailable'}")
+    print(f"Publication Date: {result.publication_date or 'unavailable'}")
+    print(f"Report Type: {result.report_type or 'unavailable'}")
+    print(f"Report Author: {result.report_author or 'unavailable'}")
+    print(
+        "Document Metadata Author: "
+        f"{result.document_metadata_author or 'unavailable'}"
+    )
+    print(
+        "Parser Diagnostics: "
+        f"{', '.join(result.parser_diagnostics) or 'none'}"
+    )
+    print(f"Extracted Character Count: {result.extracted_character_count}")
+    print(f"Extraction Status: {result.extraction_status}")
+    print(f"Content Preview: {result.extracted_text[:240]}")
+    return 0
+
+
+def _newest_report_pdf(
+    items: tuple[HuataiReportListingItem, ...],
+) -> HuataiReportListingItem:
+    """Select one report PDF by explicit date, then source listing position."""
+    return min(
+        items,
+        key=lambda item: (
+            item.publication_date is None,
+            -item.publication_date.toordinal()
+            if item.publication_date is not None
+            else 0,
+            item.section_position,
+            item.item_position,
+        ),
+    )
+
+
+def _configured_htfc_pdf_extractor() -> HuataiPdfTextExtractor:
+    """Load only the disabled Huatai source's bounded PDF smoke-test limits."""
+    source_registry = load_yaml_file(CONFIGURATION_FILES["sources"])
+    sources = source_registry.get("sources", {})
+    reports = sources.get("research_reports", {}) if isinstance(sources, dict) else {}
+    companies = reports.get("futures_companies", []) if isinstance(reports, dict) else []
+    huatai = next(
+        (
+            source
+            for source in companies
+            if isinstance(source, dict) and source.get("provider") == "huatai_futures"
+        ),
+        None,
+    )
+    settings = huatai.get("pdf_extraction", {}) if isinstance(huatai, dict) else {}
+    if not isinstance(settings, dict):
+        raise ValueError("Huatai PDF settings must be a mapping")
+    return HuataiPdfTextExtractor(
+        download_limits=HuataiPdfDownloadLimits(
+            socket_timeout_seconds=float(settings.get("socket_timeout_seconds", 10)),
+            download_deadline_seconds=float(settings.get("download_deadline_seconds", 30)),
+            max_response_bytes=int(settings.get("max_response_bytes", 20 * 1024 * 1024)),
+            max_redirects=int(settings.get("max_redirects", 3)),
+            max_selected_pdfs=int(settings.get("max_selected_pdfs", 3)),
+        ),
+        parse_limits=HuataiPdfParseLimits(
+            max_pages=int(settings.get("max_pages", 50)),
+            max_content_stream_bytes_per_page=int(
+                settings.get("max_content_stream_bytes_per_page", 8 * 1024 * 1024)
+            ),
+            max_content_stream_bytes=int(settings.get("max_content_stream_bytes", 64 * 1024 * 1024)),
+            max_extracted_characters_per_page=int(
+                settings.get("max_extracted_characters_per_page", 20_000)
+            ),
+            max_extracted_characters=int(settings.get("max_extracted_characters", 250_000)),
+            parser_deadline_seconds=float(settings.get("parser_deadline_seconds", 20)),
+            minimum_meaningful_characters=int(settings.get("minimum_meaningful_characters", 20)),
+        ),
+    )
 
 
 def _htfc_error_message(error: Exception) -> str:

@@ -1,7 +1,7 @@
 """Tests for command-line output in the application entry point."""
 
 from contextlib import redirect_stdout
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -16,6 +16,7 @@ from futures_intelligence.main import (
     _parse_arguments,
     _run_llm_routing_smoke_test,
     _run_llm_smoke_test,
+    _run_htfc_pdf_smoke_test,
     _run_htfc_report_smoke_test,
     main,
 )
@@ -23,6 +24,9 @@ from futures_intelligence.fetchers import (
     FetchedResearchReport,
     HuataiFetchResult,
     HuataiListingDiscovery,
+    HuataiPdfAttachment,
+    HuataiPdfExtractionResult,
+    HuataiReportListingItem,
 )
 from futures_intelligence.models import MarketAnalysis, MarketInformation
 from futures_intelligence.utils.health import HealthReport
@@ -126,6 +130,10 @@ class MainTests(unittest.TestCase):
             _parse_arguments(["htfc-report-smoke-test"]).command,
             "htfc-report-smoke-test",
         )
+        self.assertEqual(
+            _parse_arguments(["htfc-pdf-smoke-test"]).command,
+            "htfc-pdf-smoke-test",
+        )
 
         output = StringIO()
         with self.assertRaises(SystemExit), redirect_stdout(output):
@@ -133,6 +141,120 @@ class MainTests(unittest.TestCase):
         self.assertIn("llm-smoke-test", output.getvalue())
         self.assertIn("llm-routing-smoke-test", output.getvalue())
         self.assertIn("htfc-report-smoke-test", output.getvalue())
+        self.assertIn("htfc-pdf-smoke-test", output.getvalue())
+
+    def test_runs_mocked_huatai_pdf_smoke_test_without_pipeline_side_effects(self) -> None:
+        listing_fetcher = Mock()
+        listing_fetcher.fetch_reports.return_value = HuataiFetchResult(
+            discovered_link_count=0,
+            selected_urls=(),
+            reports=(),
+            discovery=HuataiListingDiscovery(
+                report_items=(
+                    HuataiReportListingItem(
+                        canonical_url="https://htfc.com/wz_upload/20260721/report.pdf",
+                        link_kind="pdf_attachment",
+                        listing_title="Explicit title",
+                        publication_date=date(2026, 7, 21),
+                        report_type="专题报告",
+                        section_position=0,
+                        item_position=0,
+                    ),
+                ),
+            ),
+        )
+        extractor = Mock()
+        extractor.extract.return_value = HuataiPdfExtractionResult(
+            canonical_pdf_url="https://htfc.com/wz_upload/20260721/report.pdf",
+            byte_count=1024,
+            page_count=19,
+            document_metadata=(("Author", "Analyst"),),
+            extracted_text="中文研究报告正文。",
+            extracted_character_count=9,
+            extraction_status="success",
+            failure_category=None,
+            ocr_required=False,
+            title="Explicit title",
+            publication_date=date(2026, 7, 21),
+            report_type="专题报告",
+            document_metadata_author="Analyst",
+        )
+        output = StringIO()
+
+        with redirect_stdout(output):
+            exit_code = _run_htfc_pdf_smoke_test(
+                listing_fetcher=listing_fetcher,
+                extractor=extractor,
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Discovered report PDF attachments: 1", output.getvalue())
+        self.assertIn("Downloaded Byte Count: 1024", output.getvalue())
+        self.assertIn("中文研究报告正文", output.getvalue())
+        extractor.extract.assert_called_once_with(
+            HuataiPdfAttachment(
+                "https://htfc.com/wz_upload/20260721/report.pdf",
+                "Explicit title",
+                date(2026, 7, 21),
+                "专题报告",
+            )
+        )
+
+    def test_huatai_pdf_smoke_test_selects_newest_report_with_stable_tie_breaking(self) -> None:
+        listing_fetcher = Mock()
+        listing_fetcher.fetch_reports.return_value = HuataiFetchResult(
+            discovered_link_count=0,
+            selected_urls=(),
+            reports=(),
+            discovery=HuataiListingDiscovery(
+                report_items=(
+                    HuataiReportListingItem(
+                        canonical_url="https://htfc.com/wz_upload/service.pdf",
+                        link_kind="pdf_attachment",
+                        listing_title="专题报告",
+                        publication_date=date(2026, 7, 20),
+                        report_type="专题报告",
+                        section_position=0,
+                        item_position=0,
+                    ),
+                    HuataiReportListingItem(
+                        canonical_url="https://htfc.com/wz_upload/undated.pdf",
+                        link_kind="pdf_attachment",
+                        listing_title="未注明日期报告",
+                        publication_date=None,
+                        report_type="周期报告",
+                        section_position=1,
+                        item_position=0,
+                    ),
+                    HuataiReportListingItem(
+                        canonical_url="https://htfc.com/wz_upload/strategy.pdf",
+                        link_kind="pdf_attachment",
+                        listing_title="策略报告",
+                        publication_date=date(2026, 7, 20),
+                        report_type="策略报告",
+                        section_position=2,
+                        item_position=0,
+                    ),
+                ),
+            ),
+        )
+        extractor = Mock()
+        extractor.extract.return_value = _successful_pdf_result(
+            "https://htfc.com/wz_upload/service.pdf"
+        )
+
+        with redirect_stdout(StringIO()):
+            exit_code = _run_htfc_pdf_smoke_test(listing_fetcher, extractor)
+
+        self.assertEqual(exit_code, 0)
+        extractor.extract.assert_called_once_with(
+            HuataiPdfAttachment(
+                "https://htfc.com/wz_upload/service.pdf",
+                "专题报告",
+                date(2026, 7, 20),
+                "专题报告",
+            )
+        )
 
     def test_runs_mocked_huatai_report_smoke_test_without_pipeline_side_effects(self) -> None:
         report = FetchedResearchReport(
@@ -149,9 +271,27 @@ class MainTests(unittest.TestCase):
             selected_urls=(report.url,),
             reports=(report,),
             discovery=HuataiListingDiscovery(
-                html_detail_links=(report.url,),
-                pdf_attachment_links=("https://htfc.com/wz_upload/report.pdf",),
-                unsupported_links=("https://example.com/nope",),
+                report_items=(
+                    HuataiReportListingItem(
+                        canonical_url=report.url,
+                        link_kind="html_detail",
+                        listing_title="Huatai report",
+                        publication_date=date(2026, 7, 20),
+                        report_type="策略报告",
+                        section_position=0,
+                        item_position=0,
+                    ),
+                    HuataiReportListingItem(
+                        canonical_url="https://htfc.com/wz_upload/report.pdf",
+                        link_kind="pdf_attachment",
+                        listing_title="PDF report",
+                        publication_date=date(2026, 7, 20),
+                        report_type="策略报告",
+                        section_position=0,
+                        item_position=1,
+                    ),
+                ),
+                ignored_non_report_links=("https://example.com/nope",),
             ),
         )
         output = StringIO()
@@ -161,9 +301,9 @@ class MainTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         fetcher.fetch_reports.assert_called_once_with()
-        self.assertIn("Discovered HTML detail links: 1", output.getvalue())
-        self.assertIn("Discovered PDF attachments: 1", output.getvalue())
-        self.assertIn("Unsupported links skipped: 1", output.getvalue())
+        self.assertIn("Discovered report HTML detail links: 1", output.getvalue())
+        self.assertIn("Discovered report PDF attachments: 1", output.getvalue())
+        self.assertIn("Ignored non-report links: 1", output.getvalue())
         self.assertIn("Huatai report", output.getvalue())
 
     def test_huatai_pdf_only_smoke_test_reports_precise_failure(self) -> None:
@@ -173,7 +313,17 @@ class MainTests(unittest.TestCase):
             selected_urls=(),
             reports=(),
             discovery=HuataiListingDiscovery(
-                pdf_attachment_links=("https://htfc.com/wz_upload/report.pdf",),
+                report_items=(
+                    HuataiReportListingItem(
+                        canonical_url="https://htfc.com/wz_upload/report.pdf",
+                        link_kind="pdf_attachment",
+                        listing_title="PDF report",
+                        publication_date=date(2026, 7, 20),
+                        report_type="策略报告",
+                        section_position=0,
+                        item_position=0,
+                    ),
+                ),
             ),
         )
         output = StringIO()
@@ -182,8 +332,8 @@ class MainTests(unittest.TestCase):
             exit_code = _run_htfc_report_smoke_test(fetcher=fetcher)  # type: ignore[arg-type]
 
         self.assertEqual(exit_code, 1)
-        self.assertIn("Discovered HTML detail links: 0", output.getvalue())
-        self.assertIn("Discovered PDF attachments: 1", output.getvalue())
+        self.assertIn("Discovered report HTML detail links: 0", output.getvalue())
+        self.assertIn("Discovered report PDF attachments: 1", output.getvalue())
         self.assertIn("PDF parsing is intentionally disabled", output.getvalue())
         self.assertNotIn("no usable HTML report was found", output.getvalue())
 
@@ -552,3 +702,17 @@ class MainTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _successful_pdf_result(url: str) -> HuataiPdfExtractionResult:
+    return HuataiPdfExtractionResult(
+        canonical_pdf_url=url,
+        byte_count=1,
+        page_count=1,
+        document_metadata=(),
+        extracted_text="text",
+        extracted_character_count=4,
+        extraction_status="success",
+        failure_category=None,
+        ocr_required=False,
+    )
