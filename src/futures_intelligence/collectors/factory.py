@@ -6,11 +6,25 @@ from collections.abc import Mapping
 from typing import Any
 
 from futures_intelligence.collectors.base import BaseCollector
+from futures_intelligence.collectors.huatai_futures_pdf import (
+    HuataiFuturesPdfResearchReportCollector,
+)
 from futures_intelligence.collectors.market_data import MarketDataCollector
 from futures_intelligence.collectors.official_data import OfficialDataCollector
 from futures_intelligence.collectors.research_report import ResearchReportCollector
+from futures_intelligence.collectors.research_report_pdf_adapter import (
+    ResearchReportPDFMarketInformationAdapter,
+)
 from futures_intelligence.collectors.rss import RSSCollector
 from futures_intelligence.fetchers import HuataiFuturesReportFetcher
+from futures_intelligence.fetchers.huatai_pdf import (
+    HuataiPdfDownloadLimits,
+    HuataiPdfParseLimits,
+    HuataiPdfTextExtractor,
+)
+
+
+HUATAI_PDF_LISTING_MODE = "huatai_pdf_listing"
 
 
 class CollectorFactory:
@@ -34,17 +48,7 @@ class CollectorFactory:
             )
         if source_type == "research_report":
             if source_config.get("provider") == "huatai_futures":
-                return ResearchReportCollector(
-                    content_path=None,
-                    source=_optional_name(source_config) or "Huatai Futures",
-                    category=_metadata_tuple(source_config, "category"),
-                    regions=_metadata_tuple(source_config, "regions"),
-                    reliability_score=source_config.get("reliability_score", 3),
-                    structured_fetcher=HuataiFuturesReportFetcher(
-                        _required_research_listing_url(source_config),
-                        max_reports=_max_reports(source_config),
-                    ),
-                )
+                return _create_huatai_pdf_collector(source_config)
             content_path = _required_local_content_path(source_config)
             return ResearchReportCollector(
                 content_path=content_path,
@@ -129,6 +133,115 @@ def _max_reports(source_config: Mapping[str, Any]) -> int:
     value = source_config.get("max_reports", 3)
     if not isinstance(value, int) or isinstance(value, bool) or value < 1:
         raise ValueError("max_reports must be a positive integer")
+    return value
+
+
+def _create_huatai_pdf_collector(
+    source_config: Mapping[str, Any],
+) -> HuataiFuturesPdfResearchReportCollector:
+    """Construct the explicitly configured Huatai PDF collector without I/O."""
+    collection_mode = source_config.get("collection_mode")
+    if collection_mode != HUATAI_PDF_LISTING_MODE:
+        if collection_mode is None:
+            raise ValueError(
+                "Huatai Futures research report configuration requires "
+                "collection_mode='huatai_pdf_listing'"
+            )
+        raise ValueError(
+            "Unsupported Huatai Futures collection_mode: "
+            f"{collection_mode!r}"
+        )
+
+    pdf_extraction = _required_pdf_extraction_settings(source_config)
+    max_selected_pdfs = _required_positive_pdf_selection_limit(
+        _required_pdf_setting(pdf_extraction, "max_selected_pdfs")
+    )
+    download_limits = HuataiPdfDownloadLimits(
+        socket_timeout_seconds=_required_pdf_setting(
+            pdf_extraction, "socket_timeout_seconds"
+        ),
+        download_deadline_seconds=_required_pdf_setting(
+            pdf_extraction, "download_deadline_seconds"
+        ),
+        max_response_bytes=_required_pdf_setting(pdf_extraction, "max_response_bytes"),
+        max_redirects=_required_pdf_setting(pdf_extraction, "max_redirects"),
+    )
+    parse_limits = HuataiPdfParseLimits(
+        max_pages=_required_pdf_setting(pdf_extraction, "max_pages"),
+        max_content_stream_bytes_per_page=_required_pdf_setting(
+            pdf_extraction, "max_content_stream_bytes_per_page"
+        ),
+        max_content_stream_bytes=_required_pdf_setting(
+            pdf_extraction, "max_content_stream_bytes"
+        ),
+        max_extracted_characters_per_page=_required_pdf_setting(
+            pdf_extraction, "max_extracted_characters_per_page"
+        ),
+        max_extracted_characters=_required_pdf_setting(
+            pdf_extraction, "max_extracted_characters"
+        ),
+        parser_deadline_seconds=_required_pdf_setting(
+            pdf_extraction, "parser_deadline_seconds"
+        ),
+        minimum_meaningful_characters=_required_pdf_setting(
+            pdf_extraction, "minimum_meaningful_characters"
+        ),
+    )
+    return HuataiFuturesPdfResearchReportCollector(
+        listing_fetcher=HuataiFuturesReportFetcher(
+            _required_research_listing_url(source_config)
+        ),
+        pdf_extractor=HuataiPdfTextExtractor(
+            download_limits=download_limits,
+            parse_limits=parse_limits,
+        ),
+        adapter=ResearchReportPDFMarketInformationAdapter(),
+        source=_required_source_name(source_config),
+        category=_metadata_tuple(source_config, "category"),
+        regions=_metadata_tuple(source_config, "regions"),
+        reliability_score=source_config.get("reliability_score", 3),
+        provider=source_config.get("provider"),
+        max_selected_pdfs=max_selected_pdfs,
+    )
+
+
+def _required_source_name(source_config: Mapping[str, Any]) -> str:
+    """Return a required source display name for the dedicated collector."""
+    name = _optional_name(source_config)
+    if name is None:
+        raise ValueError("Huatai Futures source configuration requires a non-empty name")
+    return name
+
+
+def _required_pdf_extraction_settings(
+    source_config: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """Return the explicit bounded PDF configuration mapping."""
+    value = source_config.get("pdf_extraction")
+    if not isinstance(value, Mapping):
+        raise ValueError("Huatai Futures source configuration requires pdf_extraction")
+    return value
+
+
+def _required_pdf_setting(
+    pdf_extraction: Mapping[str, Any],
+    field_name: str,
+) -> Any:
+    """Return one required setting without supplying a competing default."""
+    if field_name not in pdf_extraction:
+        raise ValueError(
+            "Huatai Futures source configuration requires "
+            f"pdf_extraction.{field_name}"
+        )
+    return pdf_extraction[field_name]
+
+
+def _required_positive_pdf_selection_limit(value: object) -> int:
+    """Validate the one PDF setting shared by selection and download limits."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(
+            "pdf_extraction.max_selected_pdfs must be a positive integer"
+        )
     return value
 
 

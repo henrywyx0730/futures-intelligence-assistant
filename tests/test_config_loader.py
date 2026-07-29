@@ -3,7 +3,7 @@
 import unittest
 
 from futures_intelligence.collectors.factory import CollectorFactory
-from futures_intelligence.config.loader import CONFIGURATION_FILES
+from futures_intelligence.config.loader import CONFIGURATION_FILES, load_yaml_file
 
 
 def _source_entries_from_registry_text() -> list[dict[str, object]]:
@@ -30,6 +30,24 @@ def _source_entries_from_registry_text() -> list[dict[str, object]]:
     if current is not None:
         entries.append(current)
     return entries
+
+
+def _all_source_entries(value: object) -> list[dict[str, object]]:
+    """Return every nested source mapping from the loaded registry."""
+    if isinstance(value, list):
+        return [
+            entry
+            for item in value
+            for entry in _all_source_entries(item)
+        ]
+    if not isinstance(value, dict):
+        return []
+    entries = [value] if "source_type" in value else []
+    return entries + [
+        entry
+        for item in value.values()
+        for entry in _all_source_entries(item)
+    ]
 
 
 class ConfigurationLoaderTests(unittest.TestCase):
@@ -66,19 +84,26 @@ class ConfigurationLoaderTests(unittest.TestCase):
             sources_text,
         )
 
-    def test_huatai_html_report_source_is_disabled_by_default(self) -> None:
-        sources_text = CONFIGURATION_FILES["sources"].read_text(encoding="utf-8")
+    def test_huatai_pdf_source_is_explicitly_disabled_with_preserved_limits(self) -> None:
+        sources = load_yaml_file(CONFIGURATION_FILES["sources"])
+        entries = sources["sources"]["research_reports"]["futures_companies"]
+        huatai = next(entry for entry in entries if entry["name"] == "Huatai Futures")
 
-        self.assertIn(
-            "      - name: Huatai Futures\n"
-            "        source_type: research_report\n"
-            "        provider: huatai_futures\n"
-            "        priority: high\n"
-            "        enabled: false\n"
-            "        url: https://htfc.com/main/yjzx/ssrdph/index.shtml\n"
-            "        max_reports: 3",
-            sources_text,
-        )
+        self.assertFalse(huatai["enabled"])
+        self.assertEqual(huatai["source_type"], "research_report")
+        self.assertEqual(huatai["provider"], "huatai_futures")
+        self.assertEqual(huatai["collection_mode"], "huatai_pdf_listing")
+        self.assertEqual(huatai["url"], "https://htfc.com/main/yjzx/ssrdph/index.shtml")
+        self.assertEqual(huatai["max_reports"], 3)
+        self.assertEqual(huatai["pdf_extraction"]["max_selected_pdfs"], 3)
+        self.assertEqual(huatai["pdf_extraction"]["max_pages"], 50)
+        self.assertEqual(huatai["pdf_extraction"]["max_response_bytes"], 20_971_520)
+
+        self.assertIsNone(CollectorFactory.create(huatai))
+
+        for entry in _all_source_entries(sources):
+            if entry["name"] != "Huatai Futures":
+                self.assertNotIn("collection_mode", entry)
 
     def test_default_source_registry_matches_factory_capabilities(self) -> None:
         entries = _source_entries_from_registry_text()

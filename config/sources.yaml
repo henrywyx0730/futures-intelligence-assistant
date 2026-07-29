@@ -20,6 +20,7 @@ sources:
       - name: Huatai Futures
         source_type: research_report
         provider: huatai_futures
+        collection_mode: huatai_pdf_listing
         priority: high
         enabled: false
         url: https://htfc.com/main/yjzx/ssrdph/index.shtml
