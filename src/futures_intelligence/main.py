@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from futures_intelligence.analyst import AnalystRouter, LLMCandidateSelector, LLMAnalyst
 from futures_intelligence.analyst.llm import _openai_client_for_smoke_test
 from futures_intelligence.collectors.research_report import ResearchReportCollector
+from futures_intelligence.collectors.factory import CollectorFactory
 from futures_intelligence.config.loader import CONFIGURATION_FILES, load_yaml_file
 from futures_intelligence.fetchers import (
     HuataiFuturesReportFetcher,
@@ -38,6 +42,7 @@ SMOKE_TEST_REPORT_PATH = (
     PROJECT_ROOT / "data" / "research_reports" / "sample_crude_oil_outlook.txt"
 )
 HTFC_LISTING_URL = "https://htfc.com/main/yjzx/ssrdph/index.shtml"
+HTFC_PDF_COLLECTOR_MODE = "huatai_pdf_listing"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -54,6 +59,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_htfc_report_smoke_test()
     if arguments.command == "htfc-pdf-smoke-test":
         return _run_htfc_pdf_smoke_test()
+    if arguments.command == "htfc-pdf-collector-smoke-test":
+        return _run_htfc_pdf_collector_smoke_test()
     return 1
 
 
@@ -79,6 +86,10 @@ def _parse_arguments(argv: list[str] | None) -> argparse.Namespace:
     commands.add_parser(
         "htfc-pdf-smoke-test",
         help="Extract text from one official Huatai Futures PDF attachment.",
+    )
+    commands.add_parser(
+        "htfc-pdf-collector-smoke-test",
+        help="Run one isolated Huatai Futures PDF collector integration smoke test.",
     )
     return parser.parse_args(argv)
 
@@ -217,6 +228,146 @@ def _run_htfc_pdf_smoke_test(
     print(f"Extraction Status: {result.extraction_status}")
     print(f"Content Preview: {result.extracted_text[:240]}")
     return 0
+
+
+def _run_htfc_pdf_collector_smoke_test() -> int:
+    """Run the disabled Huatai PDF collector once with in-memory overrides only."""
+    try:
+        source_registry = load_yaml_file(CONFIGURATION_FILES["sources"])
+        source = _find_htfc_pdf_collector_source(source_registry)
+        smoke_source = _htfc_pdf_collector_smoke_source(source)
+        collector = CollectorFactory.create(smoke_source)
+    except (FileNotFoundError, RuntimeError, TypeError, ValueError) as error:
+        print(f"Huatai Futures PDF collector smoke test failed: {error}")
+        return 1
+
+    if collector is None:
+        print(
+            "Huatai Futures PDF collector smoke test failed: "
+            "factory did not create a collector."
+        )
+        return 1
+
+    try:
+        information = collector.collect()
+    except (OSError, RuntimeError, ValueError) as error:
+        print(f"Huatai Futures PDF collector smoke test failed: {_htfc_error_message(error)}")
+        return 1
+
+    if not information:
+        print(
+            "Huatai Futures PDF collector smoke test failed: "
+            "no MarketInformation item was produced."
+        )
+        return 1
+    if len(information) != 1:
+        print(
+            "Huatai Futures PDF collector smoke test failed: "
+            f"expected exactly one MarketInformation item, received {len(information)}."
+        )
+        return 1
+
+    _print_htfc_pdf_collector_smoke_result(information[0])
+    return 0
+
+
+def _find_htfc_pdf_collector_source(
+    source_registry: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return the one source using the explicit Huatai PDF collector route."""
+    matching_sources = [
+        source
+        for source in _source_configuration_entries(source_registry)
+        if source.get("source_type") == "research_report"
+        and source.get("provider") == "huatai_futures"
+        and source.get("collection_mode") == HTFC_PDF_COLLECTOR_MODE
+    ]
+    if not matching_sources:
+        raise ValueError("no matching Huatai Futures PDF collector source was found")
+    if len(matching_sources) != 1:
+        raise ValueError("ambiguous Huatai Futures PDF collector source configuration")
+    return matching_sources[0]
+
+
+def _source_configuration_entries(value: object) -> tuple[dict[str, Any], ...]:
+    """Return all source-shaped mappings from the loaded source registry."""
+    if isinstance(value, list):
+        return tuple(
+            entry
+            for item in value
+            for entry in _source_configuration_entries(item)
+        )
+    if not isinstance(value, dict):
+        return ()
+    entries = (value,) if "source_type" in value else ()
+    return entries + tuple(
+        entry
+        for item in value.values()
+        for entry in _source_configuration_entries(item)
+    )
+
+
+def _htfc_pdf_collector_smoke_source(source: Mapping[str, Any]) -> dict[str, Any]:
+    """Make the sole permitted detached in-memory collector smoke overrides."""
+    smoke_source = deepcopy(dict(source))
+    pdf_extraction = smoke_source.get("pdf_extraction")
+    if not isinstance(pdf_extraction, dict):
+        raise ValueError("Huatai Futures PDF collector source requires pdf_extraction")
+    smoke_source["enabled"] = True
+    pdf_extraction["max_selected_pdfs"] = 1
+    return smoke_source
+
+
+def _print_htfc_pdf_collector_smoke_result(item: MarketInformation) -> None:
+    """Print concise normalized report provenance without printing report content."""
+    metadata = item.metadata
+    diagnostics = metadata.get("parser_diagnostics")
+    diagnostic_count = len(diagnostics) if isinstance(diagnostics, list) else 0
+    print("Huatai Futures PDF collector smoke test succeeded.")
+    print("Collected MarketInformation Count: 1")
+    print(f"Title: {item.title}")
+    print(f"Source: {item.source}")
+    print(f"Source Type: {item.source_type}")
+    print(f"Published Time: {item.published_time.isoformat()}")
+    print(
+        "Published Time Precision: "
+        f"{_smoke_metadata_text(metadata, 'published_time_precision')}"
+    )
+    print(f"Canonical PDF URL: {item.url or 'unavailable'}")
+    print(f"Category: {_smoke_text_tuple(item.category)}")
+    print(f"Regions: {_smoke_text_tuple(item.regions)}")
+    print(f"Reliability Score: {item.reliability_score}")
+    print(f"Commodities: {_smoke_text_tuple(item.commodities)}")
+    print(f"Report Type: {_smoke_metadata_text(metadata, 'report_type')}")
+    print(f"Report Author: {_smoke_metadata_text(metadata, 'report_author')}")
+    print(
+        "Document Metadata Author: "
+        f"{_smoke_metadata_text(metadata, 'document_metadata_author')}"
+    )
+    print(f"Page Count: {_smoke_metadata_value(metadata, 'page_count')}")
+    print(f"Downloaded Byte Count: {_smoke_metadata_value(metadata, 'byte_count')}")
+    print(
+        "Extracted Character Count: "
+        f"{_smoke_metadata_value(metadata, 'extracted_character_count')}"
+    )
+    print(f"Parser Diagnostic Count: {diagnostic_count}")
+
+
+def _smoke_metadata_text(metadata: Mapping[str, Any], field_name: str) -> str:
+    """Format optional textual provenance without exposing arbitrary metadata."""
+    value = metadata.get(field_name)
+    return value.strip() if isinstance(value, str) and value.strip() else "unavailable"
+
+
+def _smoke_metadata_value(metadata: Mapping[str, Any], field_name: str) -> str:
+    """Format optional scalar provenance without serializing metadata mappings."""
+    value = metadata.get(field_name)
+    return str(value) if isinstance(value, (int, float, str)) else "unavailable"
+
+
+def _smoke_text_tuple(values: tuple[str, ...]) -> str:
+    """Render an empty normalized source-scope tuple as a stable concise value."""
+    return ", ".join(values) or "none"
 
 
 def _newest_report_pdf(

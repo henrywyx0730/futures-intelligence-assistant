@@ -1,7 +1,7 @@
 """Tests for command-line output in the application entry point."""
 
 from contextlib import redirect_stdout
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -16,6 +16,7 @@ from futures_intelligence.main import (
     _parse_arguments,
     _run_llm_routing_smoke_test,
     _run_llm_smoke_test,
+    _run_htfc_pdf_collector_smoke_test,
     _run_htfc_pdf_smoke_test,
     _run_htfc_report_smoke_test,
     main,
@@ -134,6 +135,10 @@ class MainTests(unittest.TestCase):
             _parse_arguments(["htfc-pdf-smoke-test"]).command,
             "htfc-pdf-smoke-test",
         )
+        self.assertEqual(
+            _parse_arguments(["htfc-pdf-collector-smoke-test"]).command,
+            "htfc-pdf-collector-smoke-test",
+        )
 
         output = StringIO()
         with self.assertRaises(SystemExit), redirect_stdout(output):
@@ -142,6 +147,215 @@ class MainTests(unittest.TestCase):
         self.assertIn("llm-routing-smoke-test", output.getvalue())
         self.assertIn("htfc-report-smoke-test", output.getvalue())
         self.assertIn("htfc-pdf-smoke-test", output.getvalue())
+        self.assertIn("htfc-pdf-collector-smoke-test", output.getvalue())
+
+    @patch(
+        "futures_intelligence.main._run_htfc_pdf_collector_smoke_test",
+        return_value=1,
+    )
+    def test_main_dispatches_huatai_pdf_collector_smoke_test_command(
+        self, smoke_test: Mock
+    ) -> None:
+        self.assertEqual(main(["htfc-pdf-collector-smoke-test"]), 1)
+        smoke_test.assert_called_once_with()
+
+    def test_huatai_pdf_collector_smoke_test_uses_detached_exact_source_and_prints_provenance(
+        self,
+    ) -> None:
+        source = _huatai_pdf_source()
+        registry = {
+            "sources": {
+                "research_reports": {
+                    "futures_companies": [
+                        {"name": "Lookalike", "source_type": "research_report"},
+                        source,
+                    ]
+                }
+            }
+        }
+        item = _huatai_pdf_market_information()
+        collector = Mock()
+        collector.collect.return_value = [item]
+        output = StringIO()
+
+        with (
+            patch("futures_intelligence.main.load_yaml_file", return_value=registry),
+            patch(
+                "futures_intelligence.main.CollectorFactory.create",
+                return_value=collector,
+            ) as create,
+            redirect_stdout(output),
+        ):
+            exit_code = _run_htfc_pdf_collector_smoke_test()
+
+        self.assertEqual(exit_code, 0)
+        create.assert_called_once()
+        smoke_source = create.call_args.args[0]
+        self.assertIsNot(smoke_source, source)
+        self.assertIsNot(smoke_source["pdf_extraction"], source["pdf_extraction"])
+        self.assertTrue(smoke_source["enabled"])
+        self.assertEqual(smoke_source["pdf_extraction"]["max_selected_pdfs"], 1)
+        self.assertFalse(source["enabled"])
+        self.assertEqual(source["pdf_extraction"]["max_selected_pdfs"], 3)
+        self.assertEqual(
+            {
+                key: value
+                for key, value in smoke_source["pdf_extraction"].items()
+                if key != "max_selected_pdfs"
+            },
+            {
+                key: value
+                for key, value in source["pdf_extraction"].items()
+                if key != "max_selected_pdfs"
+            },
+        )
+        collector.collect.assert_called_once_with()
+        rendered = output.getvalue()
+        self.assertIn("Huatai Futures PDF collector smoke test succeeded.", rendered)
+        self.assertIn("Collected MarketInformation Count: 1", rendered)
+        self.assertIn("Title: Huatai PDF report", rendered)
+        self.assertIn("Published Time: 2026-07-29T00:00:00+08:00", rendered)
+        self.assertIn("Published Time Precision: date", rendered)
+        self.assertIn("Canonical PDF URL: https://htfc.com/wz_upload/report.pdf", rendered)
+        self.assertIn("Commodities: none", rendered)
+        self.assertIn("Report Author: Report analyst", rendered)
+        self.assertIn("Document Metadata Author: PDF author", rendered)
+        self.assertIn("Parser Diagnostic Count: 1", rendered)
+        self.assertNotIn(item.content, rendered)
+        self.assertNotIn("FULL_DOCUMENT_METADATA_SECRET_MARKER_7E91", rendered)
+        self.assertNotIn("document_metadata", rendered)
+
+    def test_huatai_pdf_collector_smoke_test_rejects_missing_or_ambiguous_sources(
+        self,
+    ) -> None:
+        missing_registry = {"sources": {"research_reports": {"futures_companies": []}}}
+        ambiguous_registry = {
+            "sources": {
+                "research_reports": {
+                    "futures_companies": [_huatai_pdf_source(), _huatai_pdf_source()]
+                }
+            }
+        }
+
+        for registry, expected in (
+            (missing_registry, "no matching"),
+            (ambiguous_registry, "ambiguous"),
+        ):
+            with self.subTest(expected=expected):
+                output = StringIO()
+                with (
+                    patch(
+                        "futures_intelligence.main.load_yaml_file",
+                        return_value=registry,
+                    ),
+                    patch("futures_intelligence.main.CollectorFactory.create") as create,
+                    redirect_stdout(output),
+                ):
+                    exit_code = _run_htfc_pdf_collector_smoke_test()
+
+                self.assertEqual(exit_code, 1)
+                self.assertIn(expected, output.getvalue().lower())
+                create.assert_not_called()
+
+    def test_huatai_pdf_collector_smoke_test_fails_for_no_factory_collector_or_invalid_item_count(
+        self,
+    ) -> None:
+        for factory_result, expected in (
+            (None, "factory did not create"),
+            (Mock(collect=Mock(return_value=[])), "no marketinformation item"),
+            (
+                Mock(
+                    collect=Mock(
+                        return_value=[
+                            _huatai_pdf_market_information(),
+                            _huatai_pdf_market_information(),
+                        ]
+                    )
+                ),
+                "expected exactly one",
+            ),
+        ):
+            with self.subTest(expected=expected):
+                source = _huatai_pdf_source()
+                registry = {
+                    "sources": {
+                        "research_reports": {"futures_companies": [source]}
+                    }
+                }
+                output = StringIO()
+                with (
+                    patch(
+                        "futures_intelligence.main.load_yaml_file",
+                        return_value=registry,
+                    ),
+                    patch(
+                        "futures_intelligence.main.CollectorFactory.create",
+                        return_value=factory_result,
+                    ),
+                    redirect_stdout(output),
+                ):
+                    exit_code = _run_htfc_pdf_collector_smoke_test()
+
+                self.assertEqual(exit_code, 1)
+                self.assertIn(expected, output.getvalue().lower())
+                self.assertFalse(source["enabled"])
+                self.assertEqual(source["pdf_extraction"]["max_selected_pdfs"], 3)
+
+    def test_huatai_pdf_collector_smoke_test_preserves_config_when_collection_fails(
+        self,
+    ) -> None:
+        source = _huatai_pdf_source()
+        registry = {
+            "sources": {"research_reports": {"futures_companies": [source]}}
+        }
+        collector = Mock()
+        collector.collect.side_effect = RuntimeError("listing unavailable")
+        output = StringIO()
+
+        with (
+            patch("futures_intelligence.main.load_yaml_file", return_value=registry),
+            patch(
+                "futures_intelligence.main.CollectorFactory.create",
+                return_value=collector,
+            ),
+            redirect_stdout(output),
+        ):
+            exit_code = _run_htfc_pdf_collector_smoke_test()
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("listing unavailable", output.getvalue())
+        self.assertFalse(source["enabled"])
+        self.assertEqual(source["pdf_extraction"]["max_selected_pdfs"], 3)
+
+    def test_huatai_pdf_collector_smoke_test_propagates_unexpected_collector_error_without_mutating_config(
+        self,
+    ) -> None:
+        source = _huatai_pdf_source()
+        registry = {
+            "sources": {"research_reports": {"futures_companies": [source]}}
+        }
+        collector = Mock()
+        collector.collect.side_effect = KeyError("unexpected collector failure")
+
+        with (
+            patch("futures_intelligence.main.load_yaml_file", return_value=registry),
+            patch(
+                "futures_intelligence.main.CollectorFactory.create",
+                return_value=collector,
+            ) as create,
+        ):
+            with self.assertRaises(KeyError) as raised:
+                _run_htfc_pdf_collector_smoke_test()
+
+        self.assertEqual(raised.exception.args, ("unexpected collector failure",))
+        create.assert_called_once()
+        smoke_source = create.call_args.args[0]
+        self.assertTrue(smoke_source["enabled"])
+        self.assertEqual(smoke_source["pdf_extraction"]["max_selected_pdfs"], 1)
+        self.assertIsNot(smoke_source["pdf_extraction"], source["pdf_extraction"])
+        self.assertFalse(source["enabled"])
+        self.assertEqual(source["pdf_extraction"]["max_selected_pdfs"], 3)
+        collector.collect.assert_called_once_with()
 
     def test_runs_mocked_huatai_pdf_smoke_test_without_pipeline_side_effects(self) -> None:
         listing_fetcher = Mock()
@@ -715,4 +929,68 @@ def _successful_pdf_result(url: str) -> HuataiPdfExtractionResult:
         extraction_status="success",
         failure_category=None,
         ocr_required=False,
+    )
+
+
+def _huatai_pdf_source() -> dict[str, object]:
+    """Return a disabled registry-shaped Huatai PDF source for CLI tests."""
+    return {
+        "name": "Huatai Futures",
+        "source_type": "research_report",
+        "provider": "huatai_futures",
+        "collection_mode": "huatai_pdf_listing",
+        "enabled": False,
+        "url": "https://htfc.com/main/yjzx/ssrdph/index.shtml",
+        "max_reports": 3,
+        "category": ["macro", "energy"],
+        "regions": ["China"],
+        "reliability_score": 5,
+        "pdf_extraction": {
+            "socket_timeout_seconds": 10,
+            "download_deadline_seconds": 30,
+            "max_response_bytes": 20_971_520,
+            "max_redirects": 3,
+            "max_selected_pdfs": 3,
+            "max_pages": 50,
+            "max_content_stream_bytes_per_page": 8_388_608,
+            "max_content_stream_bytes": 67_108_864,
+            "max_extracted_characters_per_page": 20_000,
+            "max_extracted_characters": 250_000,
+            "parser_deadline_seconds": 20,
+            "minimum_meaningful_characters": 20,
+        },
+    }
+
+
+def _huatai_pdf_market_information() -> MarketInformation:
+    """Return normalized provenance without exposing report body text."""
+    return MarketInformation(
+        title="Huatai PDF report",
+        source="Huatai Futures",
+        source_type="research_report",
+        published_time=datetime(
+            2026,
+            7,
+            29,
+            tzinfo=timezone(timedelta(hours=8)),
+        ),
+        content="This raw report content must never appear in smoke output.",
+        category=("macro", "energy"),
+        regions=("China",),
+        reliability_score=5,
+        url="https://htfc.com/wz_upload/report.pdf",
+        metadata={
+            "published_time_precision": "date",
+            "report_type": "专题报告",
+            "report_author": "Report analyst",
+            "document_metadata_author": "PDF author",
+            "page_count": 12,
+            "byte_count": 2048,
+            "extracted_character_count": 512,
+            "parser_diagnostics": ["non_zero_indexed_xref"],
+            "document_metadata": {
+                "Author": "PDF author",
+                "Marker": "FULL_DOCUMENT_METADATA_SECRET_MARKER_7E91",
+            },
+        },
     )
