@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timezone, timedelta
 from html.parser import HTMLParser
+import logging
 import re
 from typing import Callable, Protocol
 from urllib.parse import urljoin, urlparse
@@ -13,6 +14,9 @@ from urllib.request import Request, urlopen
 
 HTFC_DOMAINS = frozenset({"htfc.com", "www.htfc.com"})
 DEFAULT_USER_AGENT = "FuturesIntelligenceAssistant/0.1"
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -33,6 +37,8 @@ class HuataiListingDiscovery:
 
     report_items: tuple["HuataiReportListingItem", ...] = ()
     ignored_non_report_links: tuple[str, ...] = ()
+    recognized_report_section_count: int = 0
+    recognized_report_list_count: int = 0
 
     @property
     def html_detail_links(self) -> tuple[str, ...]:
@@ -105,6 +111,10 @@ class HuataiFetchResult:
     discovery: HuataiListingDiscovery | None = None
 
 
+class HuataiListingStructureError(RuntimeError):
+    """Raised when the official listing no longer exposes its expected structure."""
+
+
 class _Response(Protocol):
     headers: object
 
@@ -138,8 +148,7 @@ class HuataiFuturesReportFetcher:
 
     def fetch_reports(self) -> HuataiFetchResult:
         """Discover, bound, and parse official HTML detail pages in listing order."""
-        listing_html, listing_url = self._fetch_html(self.listing_url)
-        discovery = discover_listing_links(listing_html, listing_url)
+        discovery = self.discover_listing()
         selected = discovery.html_detail_links[: self.max_reports]
         reports: list[FetchedResearchReport] = []
         for detail_url in selected:
@@ -150,6 +159,25 @@ class HuataiFuturesReportFetcher:
         return HuataiFetchResult(
             len(discovery.html_detail_links), selected, tuple(reports), discovery
         )
+
+    def discover_listing(self) -> HuataiListingDiscovery:
+        """Fetch and parse only the official research-report listing page."""
+        listing_html, listing_url = self._fetch_html(self.listing_url)
+        discovery = discover_listing_links(listing_html, listing_url)
+        if (
+            discovery.recognized_report_section_count == 0
+            or discovery.recognized_report_list_count == 0
+        ):
+            logger.warning(
+                "Huatai Futures report listing structure was not recognized "
+                "(sections=%d, lists=%d).",
+                discovery.recognized_report_section_count,
+                discovery.recognized_report_list_count,
+            )
+            raise HuataiListingStructureError(
+                "Huatai Futures report listing structure was not recognized"
+            )
+        return discovery
 
     def _fetch_html(self, url: str) -> tuple[str, str]:
         _validate_htfc_url(url)
@@ -220,6 +248,8 @@ class _ListingParser(HTMLParser):
         super().__init__()
         self.report_records: list[_PendingListingRecord] = []
         self.ignored_hrefs: list[str] = []
+        self.recognized_report_section_count = 0
+        self.recognized_report_list_count = 0
         self._stack: list[_OpenElement] = []
         self._next_section_position = 0
 
@@ -242,6 +272,7 @@ class _ListingParser(HTMLParser):
             element.report_list = True
             element.report_type = report_box.report_type if report_box is not None else None
             element.section_position = report_box.section_position if report_box is not None else None
+            self.recognized_report_list_count += 1
         elif tag == "li" and parent is not None and parent.report_list and not hidden:
             assert parent.report_type is not None and parent.section_position is not None
             item_position = sum(
@@ -279,6 +310,7 @@ class _ListingParser(HTMLParser):
             if report_box is not None and report_type in _REPORT_TYPES:
                 report_box.report_type = report_type
                 report_box.section_position = self._next_section_position
+                self.recognized_report_section_count += 1
                 self._next_section_position += 1
         if element.record is not None and element.record.href and element.record.title_text:
             self.report_records.append(element.record)
@@ -372,6 +404,8 @@ def discover_listing_links(html: str, base_url: str) -> HuataiListingDiscovery:
     return HuataiListingDiscovery(
         report_items=tuple(items),
         ignored_non_report_links=tuple(ignored_links),
+        recognized_report_section_count=parser.recognized_report_section_count,
+        recognized_report_list_count=parser.recognized_report_list_count,
     )
 
 

@@ -10,6 +10,7 @@ from futures_intelligence.fetchers import (
     HuataiReportListingItem,
     discover_listing_links,
 )
+from futures_intelligence.fetchers.huatai_futures import HuataiListingStructureError
 
 
 FIXTURE_DIRECTORY = Path(__file__).parent / "fixtures"
@@ -35,6 +36,88 @@ class FakeResponse:
 
 
 class HuataiFuturesReportFetcherTests(unittest.TestCase):
+    def test_discovers_listing_without_requesting_detail_or_pdf_pages(self) -> None:
+        listing = (
+            '<div class="ztreport_box"><div class="compre_top"><p><span>专题报告</span>'
+            '</p></div><ul class="clranking"><li>2026-07-15 '
+            '<a href="/wz_upload/20260715/gold.pdf">Gold PDF</a></li></ul></div>'
+        )
+        calls: list[str] = []
+
+        def opener(request: object, timeout: float) -> FakeResponse:
+            del timeout
+            url = request.full_url  # type: ignore[attr-defined]
+            calls.append(url)
+            return FakeResponse(url, listing)
+
+        fetcher = HuataiFuturesReportFetcher(
+            "https://htfc.com/main/yjzx/ssrdph/index.shtml",
+            opener=opener,
+        )
+
+        discovery = fetcher.discover_listing()
+
+        self.assertEqual(
+            discovery.pdf_attachment_links,
+            ("https://htfc.com/wz_upload/20260715/gold.pdf",),
+        )
+        self.assertEqual(calls, ["https://htfc.com/main/yjzx/ssrdph/index.shtml"])
+
+    def test_recognized_listing_with_only_html_details_remains_valid(self) -> None:
+        listing = (
+            '<div class="ztreport_box"><div class="compre_top"><p><span>专题报告</span>'
+            '</p></div><ul class="clranking"><li>2026-07-15 '
+            '<a href="/main/a/20260715/80180965.shtml">HTML detail</a>'
+            '</li></ul></div>'
+        )
+
+        def opener(request: object, timeout: float) -> FakeResponse:
+            del timeout
+            return FakeResponse(request.full_url, listing)  # type: ignore[attr-defined]
+
+        discovery = HuataiFuturesReportFetcher(
+            "https://htfc.com/main/yjzx/ssrdph/index.shtml",
+            opener=opener,
+        ).discover_listing()
+
+        self.assertEqual(discovery.recognized_report_section_count, 1)
+        self.assertEqual(discovery.recognized_report_list_count, 1)
+        self.assertEqual(discovery.pdf_attachment_links, ())
+
+    def test_rejects_unrecognized_listing_structure(self) -> None:
+        def opener(request: object, timeout: float) -> FakeResponse:
+            del timeout
+            return FakeResponse(
+                request.full_url,  # type: ignore[attr-defined]
+                "<main><a href='/report.pdf'>Report</a></main>",
+            )
+
+        fetcher = HuataiFuturesReportFetcher(
+            "https://htfc.com/main/yjzx/ssrdph/index.shtml",
+            opener=opener,
+        )
+
+        with self.assertRaisesRegex(HuataiListingStructureError, "structure"):
+            fetcher.discover_listing()
+
+    def test_rejects_recognized_section_without_report_list_container(self) -> None:
+        listing = (
+            '<div class="ztreport_box"><div class="compre_top"><p><span>专题报告</span>'
+            "</p></div><p>Listing changed</p></div>"
+        )
+
+        def opener(request: object, timeout: float) -> FakeResponse:
+            del timeout
+            return FakeResponse(request.full_url, listing)  # type: ignore[attr-defined]
+
+        fetcher = HuataiFuturesReportFetcher(
+            "https://htfc.com/main/yjzx/ssrdph/index.shtml",
+            opener=opener,
+        )
+
+        with self.assertRaisesRegex(HuataiListingStructureError, "structure"):
+            fetcher.discover_listing()
+
     def test_scopes_listing_items_to_explicit_report_section_containers(self) -> None:
         listing = (FIXTURE_DIRECTORY / "htfc_report_sections.html").read_text(
             encoding="utf-8"
@@ -45,6 +128,8 @@ class HuataiFuturesReportFetcherTests(unittest.TestCase):
         )
 
         self.assertEqual(len(result.report_items), 24)
+        self.assertEqual(result.recognized_report_section_count, 3)
+        self.assertEqual(result.recognized_report_list_count, 3)
         self.assertEqual(len(result.html_detail_links), 8)
         self.assertEqual(len(result.pdf_attachment_links), 16)
         self.assertEqual(
