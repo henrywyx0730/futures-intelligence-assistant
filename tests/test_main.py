@@ -14,6 +14,7 @@ from futures_intelligence.main import (
     SMOKE_TEST_REPORT_PATH,
     _load_smoke_test_information,
     _parse_arguments,
+    _run_htfc_pdf_analysis_smoke_test,
     _run_llm_routing_smoke_test,
     _run_llm_smoke_test,
     _run_htfc_pdf_collector_smoke_test,
@@ -139,6 +140,10 @@ class MainTests(unittest.TestCase):
             _parse_arguments(["htfc-pdf-collector-smoke-test"]).command,
             "htfc-pdf-collector-smoke-test",
         )
+        self.assertEqual(
+            _parse_arguments(["htfc-pdf-analysis-smoke-test"]).command,
+            "htfc-pdf-analysis-smoke-test",
+        )
 
         output = StringIO()
         with self.assertRaises(SystemExit), redirect_stdout(output):
@@ -148,6 +153,7 @@ class MainTests(unittest.TestCase):
         self.assertIn("htfc-report-smoke-test", output.getvalue())
         self.assertIn("htfc-pdf-smoke-test", output.getvalue())
         self.assertIn("htfc-pdf-collector-smoke-test", output.getvalue())
+        self.assertIn("htfc-pdf-analysis-smoke-test", output.getvalue())
 
     @patch(
         "futures_intelligence.main._run_htfc_pdf_collector_smoke_test",
@@ -158,6 +164,175 @@ class MainTests(unittest.TestCase):
     ) -> None:
         self.assertEqual(main(["htfc-pdf-collector-smoke-test"]), 1)
         smoke_test.assert_called_once_with()
+
+    @patch(
+        "futures_intelligence.main._run_htfc_pdf_analysis_smoke_test",
+        return_value=1,
+    )
+    def test_main_dispatches_huatai_pdf_analysis_smoke_test_command(
+        self, smoke_test: Mock
+    ) -> None:
+        self.assertEqual(main(["htfc-pdf-analysis-smoke-test"]), 1)
+        smoke_test.assert_called_once_with()
+
+    def test_huatai_pdf_collector_smoke_test_uses_shared_one_item_collection_helper(
+        self,
+    ) -> None:
+        item = _huatai_pdf_market_information()
+        output = StringIO()
+
+        with (
+            patch(
+                "futures_intelligence.main._collect_one_htfc_pdf_market_information",
+                return_value=item,
+            ) as collect_one,
+            redirect_stdout(output),
+        ):
+            exit_code = _run_htfc_pdf_collector_smoke_test()
+
+        self.assertEqual(exit_code, 0)
+        collect_one.assert_called_once_with()
+        self.assertIn("Huatai Futures PDF collector smoke test succeeded.", output.getvalue())
+        self.assertIn("Title: Huatai PDF report", output.getvalue())
+
+    def test_huatai_pdf_analysis_smoke_test_runs_ranker_and_default_router_for_valid_neutral_analysis(
+        self,
+    ) -> None:
+        item = _huatai_pdf_market_information()
+        analysis = MarketAnalysis(
+            item,
+            "No tracked commodity keywords detected.",
+            market_direction="neutral",
+            confidence_score=0,
+            reasoning_details=(),
+        )
+        ranker = Mock()
+        ranker.rank.return_value = [item]
+        router = Mock()
+        router.analyze.return_value = [analysis]
+        output = StringIO()
+
+        with (
+            patch(
+                "futures_intelligence.main._collect_one_htfc_pdf_market_information",
+                return_value=item,
+            ) as collect_one,
+            patch("futures_intelligence.main.InformationRanker", return_value=ranker) as ranker_class,
+            patch("futures_intelligence.main.AnalystRouter", return_value=router) as router_class,
+            patch(
+                "futures_intelligence.main.LLMAnalyst",
+                side_effect=AssertionError("analysis smoke path must not construct an LLM"),
+            ),
+            redirect_stdout(output),
+        ):
+            exit_code = _run_htfc_pdf_analysis_smoke_test()
+
+        self.assertEqual(exit_code, 0)
+        collect_one.assert_called_once_with()
+        ranker_class.assert_called_once_with()
+        ranker.rank.assert_called_once_with([item])
+        router_class.assert_called_once_with()
+        router.analyze.assert_called_once_with([item])
+        rendered = output.getvalue()
+        self.assertIn("Huatai Futures PDF analysis smoke test succeeded.", rendered)
+        self.assertIn("Source Commodities: none", rendered)
+        self.assertIn("Analysis Summary: No tracked commodity keywords detected.", rendered)
+        self.assertIn("Market Direction: neutral", rendered)
+        self.assertIn("Confidence Score: 0", rendered)
+        self.assertIn("Reasoning Detail Count: 0", rendered)
+        self.assertIn("- none", rendered)
+        self.assertNotIn(item.content, rendered)
+        self.assertNotIn("FULL_DOCUMENT_METADATA_SECRET_MARKER_7E91", rendered)
+
+    def test_huatai_pdf_analysis_smoke_test_rejects_invalid_ranker_or_router_results(
+        self,
+    ) -> None:
+        item = _huatai_pdf_market_information()
+        replacement = _huatai_pdf_market_information()
+        valid_analysis = MarketAnalysis(item, "Valid summary.")
+        invalid_model_analysis = MarketAnalysis(item, "Invalid model state.")
+        invalid_model_analysis.confidence_score = 101
+        invalid_cases = (
+            ([], [valid_analysis], "expected exactly one ranked"),
+            ([item, item], [valid_analysis], "expected exactly one ranked"),
+            ([replacement], [valid_analysis], "did not preserve"),
+            ([item], [], "expected exactly one marketanalysis"),
+            ([item], [valid_analysis, valid_analysis], "expected exactly one marketanalysis"),
+            ([item], [MarketAnalysis(replacement, "Other source.")], "did not preserve"),
+            ([item], [object()], "router did not return"),
+            ([item], [invalid_model_analysis], "invalid marketanalysis"),
+        )
+
+        for ranked, analyses, expected in invalid_cases:
+            with self.subTest(expected=expected):
+                ranker = Mock()
+                ranker.rank.return_value = ranked
+                router = Mock()
+                router.analyze.return_value = analyses
+                output = StringIO()
+                with (
+                    patch(
+                        "futures_intelligence.main._collect_one_htfc_pdf_market_information",
+                        return_value=item,
+                    ),
+                    patch("futures_intelligence.main.InformationRanker", return_value=ranker),
+                    patch("futures_intelligence.main.AnalystRouter", return_value=router),
+                    redirect_stdout(output),
+                ):
+                    exit_code = _run_htfc_pdf_analysis_smoke_test()
+
+                self.assertEqual(exit_code, 1)
+                self.assertIn(expected, output.getvalue().lower())
+
+    def test_huatai_pdf_analysis_smoke_test_bounds_output_and_preserves_unexpected_errors(
+        self,
+    ) -> None:
+        item = _huatai_pdf_market_information()
+        long_summary = "S" * 600
+        long_reasoning = tuple(f"R{index}-" + "x" * 300 for index in range(7))
+        analysis = MarketAnalysis(
+            item,
+            long_summary,
+            market_direction="bullish",
+            confidence_score=88,
+            reasoning_details=long_reasoning,
+        )
+        ranker = Mock()
+        ranker.rank.return_value = [item]
+        router = Mock()
+        router.analyze.return_value = [analysis]
+        output = StringIO()
+
+        with (
+            patch(
+                "futures_intelligence.main._collect_one_htfc_pdf_market_information",
+                return_value=item,
+            ),
+            patch("futures_intelligence.main.InformationRanker", return_value=ranker),
+            patch("futures_intelligence.main.AnalystRouter", return_value=router),
+            redirect_stdout(output),
+        ):
+            exit_code = _run_htfc_pdf_analysis_smoke_test()
+
+        self.assertEqual(exit_code, 0)
+        rendered = output.getvalue()
+        summary_line = next(line for line in rendered.splitlines() if line.startswith("Analysis Summary: "))
+        self.assertLessEqual(len(summary_line.removeprefix("Analysis Summary: ")), 500)
+        reasoning_lines = [line for line in rendered.splitlines() if line.startswith("- R")]
+        self.assertEqual(len(reasoning_lines), 5)
+        self.assertTrue(all(len(line.removeprefix("- ")) <= 240 for line in reasoning_lines))
+        self.assertIn("Reasoning Detail Count: 7", rendered)
+        self.assertIn("Market Direction: bullish", rendered)
+        self.assertIn("Confidence Score: 88", rendered)
+
+        with patch(
+            "futures_intelligence.main._collect_one_htfc_pdf_market_information",
+            side_effect=KeyError("unexpected analysis collection failure"),
+        ):
+            with self.assertRaises(KeyError) as raised:
+                _run_htfc_pdf_analysis_smoke_test()
+
+        self.assertEqual(raised.exception.args, ("unexpected analysis collection failure",))
 
     def test_huatai_pdf_collector_smoke_test_uses_detached_exact_source_and_prints_provenance(
         self,
@@ -220,9 +395,10 @@ class MainTests(unittest.TestCase):
         self.assertIn("Commodities: none", rendered)
         self.assertIn("Report Author: Report analyst", rendered)
         self.assertIn("Document Metadata Author: PDF author", rendered)
-        self.assertIn("Parser Diagnostic Count: 1", rendered)
+        self.assertIn("Parser Diagnostic Count: 2", rendered)
         self.assertNotIn(item.content, rendered)
         self.assertNotIn("FULL_DOCUMENT_METADATA_SECRET_MARKER_7E91", rendered)
+        self.assertNotIn("PARSER_DIAGNOSTIC_SECRET_MARKER_3B51", rendered)
         self.assertNotIn("document_metadata", rendered)
 
     def test_huatai_pdf_collector_smoke_test_rejects_missing_or_ambiguous_sources(
@@ -301,7 +477,7 @@ class MainTests(unittest.TestCase):
                 self.assertFalse(source["enabled"])
                 self.assertEqual(source["pdf_extraction"]["max_selected_pdfs"], 3)
 
-    def test_huatai_pdf_collector_smoke_test_preserves_config_when_collection_fails(
+    def test_huatai_pdf_collector_smoke_test_reports_proxy_tunnel_failures(
         self,
     ) -> None:
         source = _huatai_pdf_source()
@@ -309,7 +485,43 @@ class MainTests(unittest.TestCase):
             "sources": {"research_reports": {"futures_companies": [source]}}
         }
         collector = Mock()
-        collector.collect.side_effect = RuntimeError("listing unavailable")
+        collector.collect.side_effect = OSError("Tunnel connection failed: 502 Bad Gateway")
+        output = StringIO()
+
+        with (
+            patch("futures_intelligence.main.load_yaml_file", return_value=registry),
+            patch(
+                "futures_intelligence.main.CollectorFactory.create",
+                return_value=collector,
+            ) as create,
+            redirect_stdout(output),
+        ):
+            exit_code = _run_htfc_pdf_collector_smoke_test()
+
+        self.assertEqual(exit_code, 1)
+        rendered = output.getvalue()
+        self.assertIn("Tunnel connection failed: 502 Bad Gateway", rendered)
+        self.assertIn("NO_PROXY=htfc.com,www.htfc.com", rendered)
+        self.assertIn("no_proxy=htfc.com,www.htfc.com", rendered)
+        self.assertNotIn("pdf_extraction", rendered)
+        self.assertNotIn("socket_timeout_seconds", rendered)
+        self.assertFalse(source["enabled"])
+        self.assertEqual(source["pdf_extraction"]["max_selected_pdfs"], 3)
+        smoke_source = create.call_args.args[0]
+        self.assertTrue(smoke_source["enabled"])
+        self.assertEqual(smoke_source["pdf_extraction"]["max_selected_pdfs"], 1)
+        self.assertIsNot(smoke_source["pdf_extraction"], source["pdf_extraction"])
+        collector.collect.assert_called_once_with()
+
+    def test_huatai_pdf_analysis_smoke_test_reports_collection_proxy_failure_before_analysis(
+        self,
+    ) -> None:
+        source = _huatai_pdf_source()
+        registry = {
+            "sources": {"research_reports": {"futures_companies": [source]}}
+        }
+        collector = Mock()
+        collector.collect.side_effect = OSError("Tunnel connection failed: 502 Bad Gateway")
         output = StringIO()
 
         with (
@@ -318,14 +530,21 @@ class MainTests(unittest.TestCase):
                 "futures_intelligence.main.CollectorFactory.create",
                 return_value=collector,
             ),
+            patch("futures_intelligence.main.InformationRanker") as ranker_class,
+            patch("futures_intelligence.main.AnalystRouter") as router_class,
             redirect_stdout(output),
         ):
-            exit_code = _run_htfc_pdf_collector_smoke_test()
+            exit_code = _run_htfc_pdf_analysis_smoke_test()
 
         self.assertEqual(exit_code, 1)
-        self.assertIn("listing unavailable", output.getvalue())
+        rendered = output.getvalue()
+        self.assertIn("NO_PROXY=htfc.com,www.htfc.com", rendered)
+        self.assertIn("no_proxy=htfc.com,www.htfc.com", rendered)
+        ranker_class.assert_not_called()
+        router_class.assert_not_called()
         self.assertFalse(source["enabled"])
         self.assertEqual(source["pdf_extraction"]["max_selected_pdfs"], 3)
+        collector.collect.assert_called_once_with()
 
     def test_huatai_pdf_collector_smoke_test_propagates_unexpected_collector_error_without_mutating_config(
         self,
@@ -356,6 +575,197 @@ class MainTests(unittest.TestCase):
         self.assertFalse(source["enabled"])
         self.assertEqual(source["pdf_extraction"]["max_selected_pdfs"], 3)
         collector.collect.assert_called_once_with()
+
+    def test_huatai_pdf_collector_smoke_test_propagates_unexpected_type_error(
+        self,
+    ) -> None:
+        source = _huatai_pdf_source()
+        registry = {
+            "sources": {"research_reports": {"futures_companies": [source]}}
+        }
+        collector = Mock()
+        collector.collect.side_effect = TypeError("PHASE_D_INTERNAL_TYPE_ERROR_SECRET")
+        output = StringIO()
+
+        with (
+            patch("futures_intelligence.main.load_yaml_file", return_value=registry),
+            patch(
+                "futures_intelligence.main.CollectorFactory.create",
+                return_value=collector,
+            ) as create,
+            redirect_stdout(output),
+        ):
+            with self.assertRaises(TypeError) as raised:
+                _run_htfc_pdf_collector_smoke_test()
+
+        self.assertEqual(raised.exception.args, ("PHASE_D_INTERNAL_TYPE_ERROR_SECRET",))
+        self.assertNotIn("Huatai Futures PDF collector smoke test failed", output.getvalue())
+        self.assertTrue(create.call_args.args[0]["enabled"])
+        self.assertEqual(
+            create.call_args.args[0]["pdf_extraction"]["max_selected_pdfs"], 1
+        )
+        self.assertIsNot(
+            create.call_args.args[0]["pdf_extraction"], source["pdf_extraction"]
+        )
+        self.assertFalse(source["enabled"])
+        self.assertEqual(source["pdf_extraction"]["max_selected_pdfs"], 3)
+        collector.collect.assert_called_once_with()
+
+    def test_huatai_pdf_analysis_smoke_test_propagates_unexpected_ranker_type_error(
+        self,
+    ) -> None:
+        source = _huatai_pdf_source()
+        registry = {
+            "sources": {"research_reports": {"futures_companies": [source]}}
+        }
+        item = _huatai_pdf_market_information()
+        collector = Mock()
+        collector.collect.return_value = [item]
+        ranker = Mock()
+        ranker.rank.side_effect = TypeError("RANKER_INTERNAL_TYPE_ERROR_SECRET")
+        output = StringIO()
+
+        with (
+            patch("futures_intelligence.main.load_yaml_file", return_value=registry),
+            patch(
+                "futures_intelligence.main.CollectorFactory.create",
+                return_value=collector,
+            ),
+            patch("futures_intelligence.main.InformationRanker", return_value=ranker),
+            patch("futures_intelligence.main.AnalystRouter") as router_class,
+            redirect_stdout(output),
+        ):
+            with self.assertRaises(TypeError) as raised:
+                _run_htfc_pdf_analysis_smoke_test()
+
+        self.assertEqual(raised.exception.args, ("RANKER_INTERNAL_TYPE_ERROR_SECRET",))
+        router_class.assert_not_called()
+        self.assertNotIn("Huatai Futures PDF analysis smoke test failed", output.getvalue())
+        self.assertFalse(source["enabled"])
+        self.assertEqual(source["pdf_extraction"]["max_selected_pdfs"], 3)
+
+    def test_huatai_pdf_analysis_smoke_test_propagates_unexpected_ranker_os_error(
+        self,
+    ) -> None:
+        source = _huatai_pdf_source()
+        registry = {
+            "sources": {"research_reports": {"futures_companies": [source]}}
+        }
+        item = _huatai_pdf_market_information()
+        collector = Mock()
+        collector.collect.return_value = [item]
+        ranker = Mock()
+        ranker.rank.side_effect = OSError("RANKER_OSERROR_SECRET_MARKER")
+        output = StringIO()
+
+        with (
+            patch("futures_intelligence.main.load_yaml_file", return_value=registry),
+            patch(
+                "futures_intelligence.main.CollectorFactory.create",
+                return_value=collector,
+            ),
+            patch("futures_intelligence.main.InformationRanker", return_value=ranker),
+            patch("futures_intelligence.main.AnalystRouter") as router_class,
+            redirect_stdout(output),
+        ):
+            with self.assertRaises(OSError) as raised:
+                _run_htfc_pdf_analysis_smoke_test()
+
+        self.assertEqual(raised.exception.args, ("RANKER_OSERROR_SECRET_MARKER",))
+        self.assertNotIn("NO_PROXY", output.getvalue())
+        self.assertNotIn("no_proxy", output.getvalue())
+        self.assertNotIn("RANKER_OSERROR_SECRET_MARKER", output.getvalue())
+        router_class.assert_not_called()
+        self.assertFalse(source["enabled"])
+        self.assertEqual(source["pdf_extraction"]["max_selected_pdfs"], 3)
+
+    def test_huatai_pdf_analysis_smoke_test_propagates_unexpected_router_os_error(
+        self,
+    ) -> None:
+        source = _huatai_pdf_source()
+        registry = {
+            "sources": {"research_reports": {"futures_companies": [source]}}
+        }
+        item = _huatai_pdf_market_information()
+        collector = Mock()
+        collector.collect.return_value = [item]
+        ranker = Mock()
+        ranker.rank.return_value = [item]
+        router = Mock()
+        router.analyze.side_effect = OSError("ROUTER_OSERROR_SECRET_MARKER")
+        output = StringIO()
+
+        with (
+            patch("futures_intelligence.main.load_yaml_file", return_value=registry),
+            patch(
+                "futures_intelligence.main.CollectorFactory.create",
+                return_value=collector,
+            ),
+            patch("futures_intelligence.main.InformationRanker", return_value=ranker),
+            patch("futures_intelligence.main.AnalystRouter", return_value=router),
+            redirect_stdout(output),
+        ):
+            with self.assertRaises(OSError) as raised:
+                _run_htfc_pdf_analysis_smoke_test()
+
+        self.assertEqual(raised.exception.args, ("ROUTER_OSERROR_SECRET_MARKER",))
+        self.assertNotIn("NO_PROXY", output.getvalue())
+        self.assertNotIn("no_proxy", output.getvalue())
+        self.assertNotIn("ROUTER_OSERROR_SECRET_MARKER", output.getvalue())
+        self.assertFalse(source["enabled"])
+        self.assertEqual(source["pdf_extraction"]["max_selected_pdfs"], 3)
+
+    def test_huatai_pdf_analysis_smoke_test_propagates_unexpected_router_errors(
+        self,
+    ) -> None:
+        for exception in (
+            TypeError("ROUTER_INTERNAL_TYPE_ERROR_SECRET"),
+            AssertionError("ROUTER_INTERNAL_ASSERTION_SECRET"),
+        ):
+            with self.subTest(exception=type(exception).__name__):
+                source = _huatai_pdf_source()
+                registry = {
+                    "sources": {
+                        "research_reports": {"futures_companies": [source]}
+                    }
+                }
+                item = _huatai_pdf_market_information()
+                collector = Mock()
+                collector.collect.return_value = [item]
+                ranker = Mock()
+                ranker.rank.return_value = [item]
+                router = Mock()
+                router.analyze.side_effect = exception
+                output = StringIO()
+
+                with (
+                    patch(
+                        "futures_intelligence.main.load_yaml_file",
+                        return_value=registry,
+                    ),
+                    patch(
+                        "futures_intelligence.main.CollectorFactory.create",
+                        return_value=collector,
+                    ),
+                    patch(
+                        "futures_intelligence.main.InformationRanker",
+                        return_value=ranker,
+                    ),
+                    patch(
+                        "futures_intelligence.main.AnalystRouter",
+                        return_value=router,
+                    ),
+                    redirect_stdout(output),
+                ):
+                    with self.assertRaises(type(exception)) as raised:
+                        _run_htfc_pdf_analysis_smoke_test()
+
+                self.assertEqual(raised.exception.args, exception.args)
+                self.assertNotIn(
+                    "Huatai Futures PDF analysis smoke test failed", output.getvalue()
+                )
+                self.assertFalse(source["enabled"])
+                self.assertEqual(source["pdf_extraction"]["max_selected_pdfs"], 3)
 
     def test_runs_mocked_huatai_pdf_smoke_test_without_pipeline_side_effects(self) -> None:
         listing_fetcher = Mock()
@@ -987,7 +1397,10 @@ def _huatai_pdf_market_information() -> MarketInformation:
             "page_count": 12,
             "byte_count": 2048,
             "extracted_character_count": 512,
-            "parser_diagnostics": ["non_zero_indexed_xref"],
+            "parser_diagnostics": [
+                "non_zero_indexed_xref",
+                "PARSER_DIAGNOSTIC_SECRET_MARKER_3B51",
+            ],
             "document_metadata": {
                 "Author": "PDF author",
                 "Marker": "FULL_DOCUMENT_METADATA_SECRET_MARKER_7E91",

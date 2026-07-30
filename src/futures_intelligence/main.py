@@ -22,6 +22,7 @@ from futures_intelligence.fetchers import (
     HuataiPdfTextExtractor,
     HuataiReportListingItem,
 )
+from futures_intelligence.fetchers.huatai_futures import HuataiListingStructureError
 from futures_intelligence.models import MarketAnalysis, MarketInformation
 from futures_intelligence.processing.ranker import InformationRanker
 from futures_intelligence.services import MorningBriefService
@@ -45,6 +46,10 @@ HTFC_LISTING_URL = "https://htfc.com/main/yjzx/ssrdph/index.shtml"
 HTFC_PDF_COLLECTOR_MODE = "huatai_pdf_listing"
 
 
+class _HuataiSmokeTestFailure(RuntimeError):
+    """A bounded failure deliberately detected by a Huatai smoke command."""
+
+
 def main(argv: list[str] | None = None) -> int:
     """Parse a command and run its CLI presentation handler."""
     arguments = _parse_arguments(argv)
@@ -61,6 +66,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_htfc_pdf_smoke_test()
     if arguments.command == "htfc-pdf-collector-smoke-test":
         return _run_htfc_pdf_collector_smoke_test()
+    if arguments.command == "htfc-pdf-analysis-smoke-test":
+        return _run_htfc_pdf_analysis_smoke_test()
     return 1
 
 
@@ -90,6 +97,10 @@ def _parse_arguments(argv: list[str] | None) -> argparse.Namespace:
     commands.add_parser(
         "htfc-pdf-collector-smoke-test",
         help="Run one isolated Huatai Futures PDF collector integration smoke test.",
+    )
+    commands.add_parser(
+        "htfc-pdf-analysis-smoke-test",
+        help="Run one isolated Huatai Futures PDF analysis integration smoke test.",
     )
     return parser.parse_args(argv)
 
@@ -233,42 +244,162 @@ def _run_htfc_pdf_smoke_test(
 def _run_htfc_pdf_collector_smoke_test() -> int:
     """Run the disabled Huatai PDF collector once with in-memory overrides only."""
     try:
-        source_registry = load_yaml_file(CONFIGURATION_FILES["sources"])
-        source = _find_htfc_pdf_collector_source(source_registry)
-        smoke_source = _htfc_pdf_collector_smoke_source(source)
-        collector = CollectorFactory.create(smoke_source)
-    except (FileNotFoundError, RuntimeError, TypeError, ValueError) as error:
+        item = _collect_one_htfc_pdf_market_information()
+    except OSError as error:
+        print(
+            "Huatai Futures PDF collector smoke test failed: "
+            f"{_htfc_error_message(error)}"
+        )
+        return 1
+    except HuataiListingStructureError:
+        print(
+            "Huatai Futures PDF collector smoke test failed: "
+            "Huatai Futures report listing structure was not recognized."
+        )
+        return 1
+    except _HuataiSmokeTestFailure as error:
         print(f"Huatai Futures PDF collector smoke test failed: {error}")
         return 1
 
-    if collector is None:
+    _print_htfc_pdf_collector_smoke_result(item)
+    return 0
+
+
+def _run_htfc_pdf_analysis_smoke_test() -> int:
+    """Replay one Huatai PDF item through ranking and deterministic analysis only."""
+    try:
+        item = _collect_one_htfc_pdf_market_information()
+    except OSError as error:
         print(
-            "Huatai Futures PDF collector smoke test failed: "
-            "factory did not create a collector."
+            "Huatai Futures PDF analysis smoke test failed: "
+            f"{_htfc_error_message(error)}"
         )
+        return 1
+    except HuataiListingStructureError:
+        print(
+            "Huatai Futures PDF analysis smoke test failed: "
+            "Huatai Futures report listing structure was not recognized."
+        )
+        return 1
+    except _HuataiSmokeTestFailure as error:
+        print(f"Huatai Futures PDF analysis smoke test failed: {error}")
         return 1
 
     try:
-        information = collector.collect()
-    except (OSError, RuntimeError, ValueError) as error:
-        print(f"Huatai Futures PDF collector smoke test failed: {_htfc_error_message(error)}")
+        analysis = _analyze_one_htfc_pdf_market_information(item)
+    except _HuataiSmokeTestFailure as error:
+        print(f"Huatai Futures PDF analysis smoke test failed: {error}")
         return 1
 
+    _print_htfc_pdf_analysis_smoke_result(item, analysis)
+    return 0
+
+
+def _collect_one_htfc_pdf_market_information() -> MarketInformation:
+    """Collect exactly one normalized Huatai PDF item using detached configuration."""
+    try:
+        source_registry = load_yaml_file(CONFIGURATION_FILES["sources"])
+    except FileNotFoundError as error:
+        raise _HuataiSmokeTestFailure("source registry could not be loaded.") from error
+    source = _find_htfc_pdf_collector_source(source_registry)
+    smoke_source = _htfc_pdf_collector_smoke_source(source)
+    collector = CollectorFactory.create(smoke_source)
+    if collector is None:
+        raise _HuataiSmokeTestFailure("factory did not create a collector.")
+
+    information = collector.collect()
     if not information:
-        print(
-            "Huatai Futures PDF collector smoke test failed: "
-            "no MarketInformation item was produced."
-        )
-        return 1
+        raise _HuataiSmokeTestFailure("no MarketInformation item was produced.")
     if len(information) != 1:
-        print(
-            "Huatai Futures PDF collector smoke test failed: "
+        raise _HuataiSmokeTestFailure(
             f"expected exactly one MarketInformation item, received {len(information)}."
         )
-        return 1
+    item = information[0]
+    if not isinstance(item, MarketInformation):
+        raise _HuataiSmokeTestFailure(
+            "collector did not return a MarketInformation item."
+        )
+    return item
 
-    _print_htfc_pdf_collector_smoke_result(information[0])
-    return 0
+
+def _analyze_one_htfc_pdf_market_information(item: MarketInformation) -> MarketAnalysis:
+    """Rank and deterministically analyze one unchanged normalized item."""
+    ranked_information = InformationRanker().rank([item])
+    if not isinstance(ranked_information, list):
+        raise _HuataiSmokeTestFailure(
+            "ranker did not return a list of MarketInformation items."
+        )
+    if len(ranked_information) != 1:
+        raise _HuataiSmokeTestFailure(
+            "expected exactly one ranked MarketInformation item, "
+            f"received {len(ranked_information)}"
+        )
+    ranked_item = ranked_information[0]
+    if ranked_item is not item:
+        raise _HuataiSmokeTestFailure(
+            "ranker did not preserve the original MarketInformation item."
+        )
+
+    analyses = AnalystRouter().analyze([ranked_item])
+    if not isinstance(analyses, list):
+        raise _HuataiSmokeTestFailure(
+            "router did not return a list of MarketAnalysis items."
+        )
+    if len(analyses) != 1:
+        raise _HuataiSmokeTestFailure(
+            f"expected exactly one MarketAnalysis item, received {len(analyses)}"
+        )
+    analysis = analyses[0]
+    if not isinstance(analysis, MarketAnalysis):
+        raise _HuataiSmokeTestFailure("router did not return a MarketAnalysis item.")
+    if analysis.market_information is not item:
+        raise _HuataiSmokeTestFailure(
+            "analysis did not preserve the original MarketInformation item."
+        )
+    try:
+        MarketAnalysis(
+            analysis.market_information,
+            analysis.summary,
+            analysis.market_direction,
+            analysis.confidence_score,
+            analysis.reasoning_details,
+        )
+    except (TypeError, ValueError) as error:
+        raise _HuataiSmokeTestFailure(
+            "router returned an invalid MarketAnalysis item."
+        ) from error
+    return analysis
+
+
+def _print_htfc_pdf_analysis_smoke_result(
+    item: MarketInformation,
+    analysis: MarketAnalysis,
+) -> None:
+    """Print bounded deterministic analysis without exposing report content."""
+    print("Huatai Futures PDF analysis smoke test succeeded.")
+    print("Collected MarketInformation Count: 1")
+    print(f"Title: {item.title}")
+    print(f"Source: {item.source}")
+    print(f"Published Time: {item.published_time.isoformat()}")
+    print(f"Canonical PDF URL: {item.url or 'unavailable'}")
+    print(f"Source Commodities: {_smoke_text_tuple(item.commodities)}")
+    print(f"Analysis Summary: {_truncate_smoke_text(analysis.summary, 500)}")
+    print(f"Market Direction: {analysis.market_direction}")
+    print(f"Confidence Score: {analysis.confidence_score}")
+    print(f"Reasoning Detail Count: {len(analysis.reasoning_details)}")
+    print("Reasoning Details:")
+    if not analysis.reasoning_details:
+        print("- none")
+        return
+    for detail in analysis.reasoning_details[:5]:
+        print(f"- {_truncate_smoke_text(detail, 240)}")
+
+
+def _truncate_smoke_text(value: str, maximum_characters: int) -> str:
+    """Return deterministic bounded terminal text with an explicit truncation marker."""
+    if len(value) <= maximum_characters:
+        return value
+    return f"{value[: maximum_characters - 3]}..."
 
 
 def _find_htfc_pdf_collector_source(
@@ -283,9 +414,13 @@ def _find_htfc_pdf_collector_source(
         and source.get("collection_mode") == HTFC_PDF_COLLECTOR_MODE
     ]
     if not matching_sources:
-        raise ValueError("no matching Huatai Futures PDF collector source was found")
+        raise _HuataiSmokeTestFailure(
+            "no matching Huatai Futures PDF collector source was found."
+        )
     if len(matching_sources) != 1:
-        raise ValueError("ambiguous Huatai Futures PDF collector source configuration")
+        raise _HuataiSmokeTestFailure(
+            "ambiguous Huatai Futures PDF collector source configuration."
+        )
     return matching_sources[0]
 
 
@@ -312,7 +447,9 @@ def _htfc_pdf_collector_smoke_source(source: Mapping[str, Any]) -> dict[str, Any
     smoke_source = deepcopy(dict(source))
     pdf_extraction = smoke_source.get("pdf_extraction")
     if not isinstance(pdf_extraction, dict):
-        raise ValueError("Huatai Futures PDF collector source requires pdf_extraction")
+        raise _HuataiSmokeTestFailure(
+            "Huatai Futures PDF collector source requires pdf_extraction."
+        )
     smoke_source["enabled"] = True
     pdf_extraction["max_selected_pdfs"] = 1
     return smoke_source
