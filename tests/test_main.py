@@ -10,10 +10,13 @@ import unittest
 from unittest.mock import Mock, patch
 
 from futures_intelligence.analyst import LLMAnalyst, LLMSmokeTestResult
+from futures_intelligence.analyst.commodity_matcher import CommodityMatch
 from futures_intelligence.main import (
     SMOKE_TEST_REPORT_PATH,
+    _collect_one_htfc_pdf_market_information,
     _load_smoke_test_information,
     _parse_arguments,
+    _run_htfc_pdf_analysis_evaluation,
     _run_htfc_pdf_analysis_smoke_test,
     _run_llm_routing_smoke_test,
     _run_llm_smoke_test,
@@ -144,6 +147,10 @@ class MainTests(unittest.TestCase):
             _parse_arguments(["htfc-pdf-analysis-smoke-test"]).command,
             "htfc-pdf-analysis-smoke-test",
         )
+        self.assertEqual(
+            _parse_arguments(["htfc-pdf-analysis-eval"]).command,
+            "htfc-pdf-analysis-eval",
+        )
 
         output = StringIO()
         with self.assertRaises(SystemExit), redirect_stdout(output):
@@ -154,6 +161,7 @@ class MainTests(unittest.TestCase):
         self.assertIn("htfc-pdf-smoke-test", output.getvalue())
         self.assertIn("htfc-pdf-collector-smoke-test", output.getvalue())
         self.assertIn("htfc-pdf-analysis-smoke-test", output.getvalue())
+        self.assertIn("htfc-pdf-analysis-eval", output.getvalue())
 
     @patch(
         "futures_intelligence.main._run_htfc_pdf_collector_smoke_test",
@@ -175,6 +183,16 @@ class MainTests(unittest.TestCase):
         self.assertEqual(main(["htfc-pdf-analysis-smoke-test"]), 1)
         smoke_test.assert_called_once_with()
 
+    @patch(
+        "futures_intelligence.main._run_htfc_pdf_analysis_evaluation",
+        return_value=1,
+    )
+    def test_main_dispatches_huatai_pdf_analysis_evaluation_command(
+        self, evaluation: Mock
+    ) -> None:
+        self.assertEqual(main(["htfc-pdf-analysis-eval"]), 1)
+        evaluation.assert_called_once_with()
+
     def test_huatai_pdf_collector_smoke_test_uses_shared_one_item_collection_helper(
         self,
     ) -> None:
@@ -194,6 +212,20 @@ class MainTests(unittest.TestCase):
         collect_one.assert_called_once_with()
         self.assertIn("Huatai Futures PDF collector smoke test succeeded.", output.getvalue())
         self.assertIn("Title: Huatai PDF report", output.getvalue())
+
+    def test_one_item_huatai_collection_wrapper_uses_the_bounded_helper_limit_one(
+        self,
+    ) -> None:
+        item = _huatai_pdf_market_information()
+
+        with patch(
+            "futures_intelligence.main._collect_bounded_htfc_pdf_market_information",
+            return_value=[item],
+        ) as collect_bounded:
+            result = _collect_one_htfc_pdf_market_information()
+
+        self.assertIs(result, item)
+        collect_bounded.assert_called_once_with(1)
 
     def test_huatai_pdf_analysis_smoke_test_runs_ranker_and_default_router_for_valid_neutral_analysis(
         self,
@@ -333,6 +365,681 @@ class MainTests(unittest.TestCase):
                 _run_htfc_pdf_analysis_smoke_test()
 
         self.assertEqual(raised.exception.args, ("unexpected analysis collection failure",))
+
+    def test_huatai_pdf_analysis_evaluation_runs_bounded_ranked_deterministic_batch(
+        self,
+    ) -> None:
+        source = _huatai_pdf_source()
+        source["evaluation_secret"] = "EVALUATION_CONFIGURATION_SECRET_MARKER"
+        registry = {
+            "sources": {"research_reports": {"futures_companies": [source]}}
+        }
+        first = _huatai_pdf_market_information()
+        first.title = "First report"
+        second = _huatai_pdf_market_information()
+        second.title = "Second report"
+        third = _huatai_pdf_market_information()
+        third.title = "T" * 600
+        items = [first, second, third]
+        ranked = [third, first, second]
+        analyses = [
+            MarketAnalysis(
+                third,
+                "S" * 600,
+                market_direction="bullish",
+                confidence_score=91,
+                reasoning_details=tuple(f"R{index}-" + "x" * 300 for index in range(4)),
+            ),
+            MarketAnalysis(
+                first,
+                "Bearish report.",
+                market_direction="bearish",
+                confidence_score=60,
+                reasoning_details=("R-first.",),
+            ),
+            MarketAnalysis(
+                second,
+                "Neutral report.",
+                market_direction="neutral",
+                confidence_score=0,
+                reasoning_details=(),
+            ),
+        ]
+        collector = Mock()
+        collector.collect.return_value = items
+        ranker = Mock()
+        ranker.rank.return_value = ranked
+        router = Mock()
+        router.analyze.return_value = analyses
+        matcher = Mock()
+        matcher.match.side_effect = [
+            (
+                CommodityMatch("gold", "Gold", ("gold",)),
+                CommodityMatch("copper", "Copper", ("copper",)),
+            ),
+            (),
+            (CommodityMatch("crude_oil", "Crude Oil", ("oil",)),),
+        ]
+        output = StringIO()
+
+        with (
+            patch("futures_intelligence.main.load_yaml_file", return_value=registry),
+            patch(
+                "futures_intelligence.main.CollectorFactory.create",
+                return_value=collector,
+            ) as create,
+            patch("futures_intelligence.main.InformationRanker", return_value=ranker),
+            patch("futures_intelligence.main.AnalystRouter", return_value=router),
+            patch("futures_intelligence.main.CommodityMatcher", return_value=matcher),
+            patch(
+                "futures_intelligence.main.LLMAnalyst",
+                side_effect=AssertionError("evaluation must not construct an LLM"),
+            ),
+            redirect_stdout(output),
+        ):
+            exit_code = _run_htfc_pdf_analysis_evaluation()
+
+        self.assertEqual(exit_code, 0)
+        create.assert_called_once()
+        detached_source = create.call_args.args[0]
+        self.assertTrue(detached_source["enabled"])
+        self.assertEqual(detached_source["pdf_extraction"]["max_selected_pdfs"], 3)
+        self.assertIsNot(detached_source["pdf_extraction"], source["pdf_extraction"])
+        self.assertEqual(
+            detached_source["pdf_extraction"]["socket_timeout_seconds"],
+            source["pdf_extraction"]["socket_timeout_seconds"],
+        )
+        self.assertEqual(
+            {
+                key: value
+                for key, value in detached_source["pdf_extraction"].items()
+                if key != "max_selected_pdfs"
+            },
+            {
+                key: value
+                for key, value in source["pdf_extraction"].items()
+                if key != "max_selected_pdfs"
+            },
+        )
+        self.assertFalse(source["enabled"])
+        self.assertEqual(source["pdf_extraction"]["max_selected_pdfs"], 3)
+        collector.collect.assert_called_once_with()
+        ranker.rank.assert_called_once_with(items)
+        router.analyze.assert_called_once_with(ranked)
+        self.assertEqual(matcher.match.call_args_list, [((item,),) for item in ranked])
+        self.assertEqual(first.commodities, ())
+
+        rendered = output.getvalue()
+        self.assertIn("Requested PDF Limit: 3", rendered)
+        self.assertIn("Collected MarketInformation Count: 3", rendered)
+        self.assertIn("Analyzed MarketAnalysis Count: 3", rendered)
+        self.assertIn("Bullish Count: 1", rendered)
+        self.assertIn("Bearish Count: 1", rendered)
+        self.assertIn("Neutral Count: 1", rendered)
+        self.assertIn("Report Index: 1", rendered)
+        self.assertIn("Collection Index: 3", rendered)
+        self.assertIn("Detected Commodity Matches: Gold", rendered)
+        self.assertIn("Detected Commodity Matches: Gold, Copper", rendered)
+        self.assertIn("Detected Commodity Matches: none", rendered)
+        self.assertIn("Detected Commodity Matches: Crude Oil", rendered)
+        summary_line = next(
+            line for line in rendered.splitlines() if line.startswith("Analysis Summary: ")
+        )
+        self.assertLessEqual(len(summary_line.removeprefix("Analysis Summary: ")), 500)
+        title_line = next(
+            line for line in rendered.splitlines() if line.startswith("Title: ")
+        )
+        title_value = title_line.removeprefix("Title: ")
+        self.assertLessEqual(len(title_value), 500)
+        self.assertEqual(title_value, "T" * 497 + "...")
+        reasoning_lines = [line for line in rendered.splitlines() if line.startswith("- R")]
+        self.assertEqual(len(reasoning_lines), 4)
+        self.assertTrue(all(len(line.removeprefix("- ")) <= 240 for line in reasoning_lines))
+        self.assertIn("Reasoning Detail Count: 4", rendered)
+        self.assertNotIn(first.content, rendered)
+        self.assertNotIn("FULL_DOCUMENT_METADATA_SECRET_MARKER_7E91", rendered)
+        self.assertNotIn("PARSER_DIAGNOSTIC_SECRET_MARKER_3B51", rendered)
+        self.assertNotIn("EVALUATION_CONFIGURATION_SECRET_MARKER", rendered)
+
+    def test_huatai_pdf_analysis_evaluation_accepts_partial_collection_and_rejects_invalid_counts(
+        self,
+    ) -> None:
+        for count, expected_exit_code in ((0, 1), (1, 0), (2, 0), (3, 0), (4, 1)):
+            with self.subTest(count=count):
+                source = _huatai_pdf_source()
+                registry = {
+                    "sources": {"research_reports": {"futures_companies": [source]}}
+                }
+                items = [_huatai_pdf_market_information() for _ in range(count)]
+                for index, item in enumerate(items):
+                    item.title = f"Report {index}"
+                collector = Mock()
+                collector.collect.return_value = items
+                ranker = Mock()
+                ranker.rank.return_value = items
+                router = Mock()
+                router.analyze.return_value = [
+                    MarketAnalysis(item, "Neutral.") for item in items
+                ]
+                matcher = Mock()
+                matcher.match.return_value = ()
+                output = StringIO()
+
+                with (
+                    patch(
+                        "futures_intelligence.main.load_yaml_file",
+                        return_value=registry,
+                    ),
+                    patch(
+                        "futures_intelligence.main.CollectorFactory.create",
+                        return_value=collector,
+                    ),
+                    patch("futures_intelligence.main.InformationRanker", return_value=ranker),
+                    patch("futures_intelligence.main.AnalystRouter", return_value=router),
+                    patch("futures_intelligence.main.CommodityMatcher", return_value=matcher),
+                    redirect_stdout(output),
+                ):
+                    exit_code = _run_htfc_pdf_analysis_evaluation()
+
+                self.assertEqual(exit_code, expected_exit_code)
+                collector.collect.assert_called_once_with()
+                if expected_exit_code:
+                    ranker.rank.assert_not_called()
+                    router.analyze.assert_not_called()
+                else:
+                    ranker.rank.assert_called_once_with(items)
+                    router.analyze.assert_called_once_with(items)
+
+        source = _huatai_pdf_source()
+        registry = {
+            "sources": {"research_reports": {"futures_companies": [source]}}
+        }
+        collector = Mock()
+        collector.collect.return_value = [object()]
+        output = StringIO()
+        with (
+            patch("futures_intelligence.main.load_yaml_file", return_value=registry),
+            patch(
+                "futures_intelligence.main.CollectorFactory.create",
+                return_value=collector,
+            ),
+            redirect_stdout(output),
+        ):
+            exit_code = _run_htfc_pdf_analysis_evaluation()
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("collector did not return a marketinformation item", output.getvalue().lower())
+
+    def test_huatai_pdf_analysis_evaluation_rejects_invalid_ranker_and_router_shapes(
+        self,
+    ) -> None:
+        first = _huatai_pdf_market_information()
+        first.title = "First"
+        second = _huatai_pdf_market_information()
+        second.title = "Second"
+        replacement = _huatai_pdf_market_information()
+        replacement.title = "Second"
+        valid_analyses = [MarketAnalysis(first, "First."), MarketAnalysis(second, "Second.")]
+        invalid_cases = (
+            ([first], valid_analyses, "ranker did not return the same number"),
+            ([first, first], valid_analyses, "ranker did not preserve"),
+            ([first, replacement], valid_analyses, "ranker did not preserve"),
+            ([first, second], [valid_analyses[0]], "router did not return the same number"),
+            ([first, second], [valid_analyses[0], object()], "router did not return a marketanalysis"),
+            ([first, second], [valid_analyses[1], valid_analyses[0]], "analysis did not preserve"),
+        )
+
+        for ranked, analyses, expected in invalid_cases:
+            with self.subTest(expected=expected):
+                source = _huatai_pdf_source()
+                registry = {
+                    "sources": {"research_reports": {"futures_companies": [source]}}
+                }
+                collector = Mock()
+                collector.collect.return_value = [first, second]
+                ranker = Mock()
+                ranker.rank.return_value = ranked
+                router = Mock()
+                router.analyze.return_value = analyses
+                output = StringIO()
+
+                with (
+                    patch(
+                        "futures_intelligence.main.load_yaml_file",
+                        return_value=registry,
+                    ),
+                    patch(
+                        "futures_intelligence.main.CollectorFactory.create",
+                        return_value=collector,
+                    ),
+                    patch("futures_intelligence.main.InformationRanker", return_value=ranker),
+                    patch("futures_intelligence.main.AnalystRouter", return_value=router),
+                    patch("futures_intelligence.main.CommodityMatcher") as matcher_class,
+                    redirect_stdout(output),
+                ):
+                    exit_code = _run_htfc_pdf_analysis_evaluation()
+
+                self.assertEqual(exit_code, 1)
+                self.assertIn(expected, output.getvalue().lower())
+                if "ranker" in expected:
+                    matcher_class.assert_not_called()
+
+    def test_huatai_pdf_analysis_evaluation_propagates_analysis_and_matcher_errors(
+        self,
+    ) -> None:
+        for collaborator, exception in (
+            ("ranker", OSError("EVALUATION_RANKER_SECRET")),
+            ("ranker", TypeError("EVALUATION_RANKER_TYPE_SECRET")),
+            ("matcher", TypeError("EVALUATION_MATCHER_SECRET")),
+            ("router", OSError("EVALUATION_ROUTER_OSERROR_SECRET")),
+            ("router", AssertionError("EVALUATION_ROUTER_SECRET")),
+        ):
+            with self.subTest(collaborator=collaborator):
+                source = _huatai_pdf_source()
+                registry = {
+                    "sources": {"research_reports": {"futures_companies": [source]}}
+                }
+                item = _huatai_pdf_market_information()
+                collector = Mock()
+                collector.collect.return_value = [item]
+                ranker = Mock()
+                ranker.rank.side_effect = exception if collaborator == "ranker" else None
+                ranker.rank.return_value = [item]
+                router = Mock()
+                router.analyze.side_effect = exception if collaborator == "router" else None
+                router.analyze.return_value = [MarketAnalysis(item, "Neutral.")]
+                matcher = Mock()
+                matcher.match.side_effect = exception if collaborator == "matcher" else None
+                matcher.match.return_value = ()
+                output = StringIO()
+
+                with (
+                    patch(
+                        "futures_intelligence.main.load_yaml_file",
+                        return_value=registry,
+                    ),
+                    patch(
+                        "futures_intelligence.main.CollectorFactory.create",
+                        return_value=collector,
+                    ) as create,
+                    patch("futures_intelligence.main.InformationRanker", return_value=ranker),
+                    patch("futures_intelligence.main.AnalystRouter", return_value=router),
+                    patch("futures_intelligence.main.CommodityMatcher", return_value=matcher),
+                    redirect_stdout(output),
+                ):
+                    with self.assertRaises(type(exception)) as raised:
+                        _run_htfc_pdf_analysis_evaluation()
+
+                self.assertEqual(raised.exception.args, exception.args)
+                self.assertNotIn("NO_PROXY", output.getvalue())
+                self.assertNotIn(str(exception), output.getvalue())
+                self.assertFalse(source["enabled"])
+                self.assertEqual(source["pdf_extraction"]["max_selected_pdfs"], 3)
+                detached_source = create.call_args.args[0]
+                self.assertTrue(detached_source["enabled"])
+                self.assertEqual(
+                    detached_source["pdf_extraction"]["max_selected_pdfs"], 3
+                )
+                self.assertEqual(
+                    {
+                        key: value
+                        for key, value in detached_source["pdf_extraction"].items()
+                        if key != "max_selected_pdfs"
+                    },
+                    {
+                        key: value
+                        for key, value in source["pdf_extraction"].items()
+                        if key != "max_selected_pdfs"
+                    },
+                )
+
+    def test_huatai_pdf_analysis_evaluation_keeps_collection_failures_narrow(
+        self,
+    ) -> None:
+        for exception, expected_exit_code in (
+            (OSError("Tunnel connection failed: 502 Bad Gateway"), 1),
+            (TypeError("EVALUATION_COLLECTOR_SECRET"), None),
+        ):
+            with self.subTest(exception=type(exception).__name__):
+                source = _huatai_pdf_source()
+                registry = {
+                    "sources": {"research_reports": {"futures_companies": [source]}}
+                }
+                collector = Mock()
+                collector.collect.side_effect = exception
+                output = StringIO()
+                with (
+                    patch(
+                        "futures_intelligence.main.load_yaml_file",
+                        return_value=registry,
+                    ),
+                    patch(
+                        "futures_intelligence.main.CollectorFactory.create",
+                        return_value=collector,
+                    ) as create,
+                    patch("futures_intelligence.main.InformationRanker") as ranker_class,
+                    patch("futures_intelligence.main.AnalystRouter") as router_class,
+                    redirect_stdout(output),
+                ):
+                    if expected_exit_code is None:
+                        with self.assertRaises(type(exception)) as raised:
+                            _run_htfc_pdf_analysis_evaluation()
+                        self.assertEqual(raised.exception.args, exception.args)
+                    else:
+                        self.assertEqual(
+                            _run_htfc_pdf_analysis_evaluation(), expected_exit_code
+                        )
+
+                ranker_class.assert_not_called()
+                router_class.assert_not_called()
+                if expected_exit_code is None:
+                    self.assertNotIn("EVALUATION_COLLECTOR_SECRET", output.getvalue())
+                else:
+                    self.assertIn("NO_PROXY=htfc.com,www.htfc.com", output.getvalue())
+                    self.assertIn("no_proxy=htfc.com,www.htfc.com", output.getvalue())
+                self.assertFalse(source["enabled"])
+                self.assertEqual(source["pdf_extraction"]["max_selected_pdfs"], 3)
+                detached_source = create.call_args.args[0]
+                self.assertTrue(detached_source["enabled"])
+                self.assertEqual(
+                    detached_source["pdf_extraction"]["max_selected_pdfs"], 3
+                )
+                self.assertEqual(
+                    {
+                        key: value
+                        for key, value in detached_source["pdf_extraction"].items()
+                        if key != "max_selected_pdfs"
+                    },
+                    {
+                        key: value
+                        for key, value in source["pdf_extraction"].items()
+                        if key != "max_selected_pdfs"
+                    },
+                )
+
+    def test_huatai_pdf_analysis_evaluation_rejects_noncanonical_analysis_fields(
+        self,
+    ) -> None:
+        for field_name, value in (
+            ("market_direction", "BULLISH"),
+            ("market_direction", " bullish "),
+            ("summary", " Summary with surrounding whitespace "),
+            ("reasoning_details", (" Detail with surrounding whitespace ",)),
+            ("confidence_score", True),
+        ):
+            with self.subTest(field_name=field_name, value=value):
+                source = _huatai_pdf_source()
+                registry = {
+                    "sources": {"research_reports": {"futures_companies": [source]}}
+                }
+                item = _huatai_pdf_market_information()
+                analysis = MarketAnalysis(item, "Canonical summary.")
+                setattr(analysis, field_name, value)
+                collector = Mock()
+                collector.collect.return_value = [item]
+                ranker = Mock()
+                ranker.rank.return_value = [item]
+                router = Mock()
+                router.analyze.return_value = [analysis]
+                output = StringIO()
+
+                with (
+                    patch(
+                        "futures_intelligence.main.load_yaml_file",
+                        return_value=registry,
+                    ),
+                    patch(
+                        "futures_intelligence.main.CollectorFactory.create",
+                        return_value=collector,
+                    ) as create,
+                    patch("futures_intelligence.main.InformationRanker", return_value=ranker),
+                    patch("futures_intelligence.main.AnalystRouter", return_value=router),
+                    patch("futures_intelligence.main.CommodityMatcher") as matcher_class,
+                    redirect_stdout(output),
+                ):
+                    exit_code = _run_htfc_pdf_analysis_evaluation()
+
+                self.assertEqual(exit_code, 1)
+                rendered = output.getvalue()
+                self.assertNotIn("deterministic analysis evaluation succeeded", rendered)
+                self.assertNotIn("Bullish Count:", rendered)
+                self.assertNotIn(str(value), rendered)
+                matcher_class.assert_not_called()
+                self.assertFalse(source["enabled"])
+                self.assertEqual(source["pdf_extraction"]["max_selected_pdfs"], 3)
+                detached_source = create.call_args.args[0]
+                self.assertTrue(detached_source["enabled"])
+                self.assertEqual(
+                    detached_source["pdf_extraction"]["max_selected_pdfs"], 3
+                )
+                self.assertIsNot(
+                    detached_source["pdf_extraction"], source["pdf_extraction"]
+                )
+
+    def test_huatai_pdf_analysis_evaluation_rejects_malformed_matcher_results(
+        self,
+    ) -> None:
+        valid_match = CommodityMatch("gold", "Gold", ("gold",))
+        foreign_match = SimpleNamespace(commodity_label="FOREIGN_MATCH_SECRET")
+        for matcher_result in (
+            None,
+            [valid_match],
+            (match for match in (valid_match,)),
+            (foreign_match,),
+            (object(),),
+        ):
+            with self.subTest(matcher_result_type=type(matcher_result).__name__):
+                source = _huatai_pdf_source()
+                registry = {
+                    "sources": {"research_reports": {"futures_companies": [source]}}
+                }
+                item = _huatai_pdf_market_information()
+                collector = Mock()
+                collector.collect.return_value = [item]
+                ranker = Mock()
+                ranker.rank.return_value = [item]
+                router = Mock()
+                router.analyze.return_value = [MarketAnalysis(item, "Neutral.")]
+                matcher = Mock()
+                matcher.match.return_value = matcher_result
+                output = StringIO()
+
+                with (
+                    patch(
+                        "futures_intelligence.main.load_yaml_file",
+                        return_value=registry,
+                    ),
+                    patch(
+                        "futures_intelligence.main.CollectorFactory.create",
+                        return_value=collector,
+                    ) as create,
+                    patch("futures_intelligence.main.InformationRanker", return_value=ranker),
+                    patch("futures_intelligence.main.AnalystRouter", return_value=router),
+                    patch("futures_intelligence.main.CommodityMatcher", return_value=matcher),
+                    redirect_stdout(output),
+                ):
+                    exit_code = _run_htfc_pdf_analysis_evaluation()
+
+                self.assertEqual(exit_code, 1)
+                rendered = output.getvalue()
+                self.assertNotIn("deterministic analysis evaluation succeeded", rendered)
+                self.assertNotIn("FOREIGN_MATCH_SECRET", rendered)
+                self.assertEqual(item.commodities, ())
+                self.assertFalse(source["enabled"])
+                self.assertEqual(source["pdf_extraction"]["max_selected_pdfs"], 3)
+                self.assertTrue(create.call_args.args[0]["enabled"])
+
+    def test_huatai_pdf_analysis_evaluation_rejects_out_of_contract_collector_results(
+        self,
+    ) -> None:
+        item = _huatai_pdf_market_information()
+        for collected in (
+            None,
+            (item,),
+            (value for value in (item,)),
+            [object()],
+            [item, object()],
+        ):
+            with self.subTest(collected_type=type(collected).__name__):
+                source = _huatai_pdf_source()
+                registry = {
+                    "sources": {"research_reports": {"futures_companies": [source]}}
+                }
+                collector = Mock()
+                collector.collect.return_value = collected
+                output = StringIO()
+
+                with (
+                    patch(
+                        "futures_intelligence.main.load_yaml_file",
+                        return_value=registry,
+                    ),
+                    patch(
+                        "futures_intelligence.main.CollectorFactory.create",
+                        return_value=collector,
+                    ) as create,
+                    patch("futures_intelligence.main.InformationRanker") as ranker_class,
+                    patch("futures_intelligence.main.AnalystRouter") as router_class,
+                    patch("futures_intelligence.main.CommodityMatcher") as matcher_class,
+                    redirect_stdout(output),
+                ):
+                    exit_code = _run_htfc_pdf_analysis_evaluation()
+
+                self.assertEqual(exit_code, 1)
+                self.assertNotIn(
+                    "deterministic analysis evaluation succeeded", output.getvalue()
+                )
+                ranker_class.assert_not_called()
+                router_class.assert_not_called()
+                matcher_class.assert_not_called()
+                self.assertFalse(source["enabled"])
+                self.assertEqual(source["pdf_extraction"]["max_selected_pdfs"], 3)
+                detached_source = create.call_args.args[0]
+                self.assertTrue(detached_source["enabled"])
+                self.assertEqual(
+                    detached_source["pdf_extraction"]["max_selected_pdfs"], 3
+                )
+                self.assertIsNot(
+                    detached_source["pdf_extraction"], source["pdf_extraction"]
+                )
+                self.assertEqual(
+                    {
+                        key: value
+                        for key, value in detached_source["pdf_extraction"].items()
+                        if key != "max_selected_pdfs"
+                    },
+                    {
+                        key: value
+                        for key, value in source["pdf_extraction"].items()
+                        if key != "max_selected_pdfs"
+                    },
+                )
+
+    def test_huatai_pdf_analysis_evaluation_rejects_out_of_contract_ranker_results(
+        self,
+    ) -> None:
+        first = _huatai_pdf_market_information()
+        second = _huatai_pdf_market_information()
+        replacement = _huatai_pdf_market_information()
+        for ranked in (
+            None,
+            (first, second),
+            (value for value in (first, second)),
+            [first, object()],
+            [first, replacement],
+            [first],
+            [first, first],
+        ):
+            with self.subTest(ranked_type=type(ranked).__name__):
+                source = _huatai_pdf_source()
+                registry = {
+                    "sources": {"research_reports": {"futures_companies": [source]}}
+                }
+                collector = Mock()
+                collector.collect.return_value = [first, second]
+                ranker = Mock()
+                ranker.rank.return_value = ranked
+                output = StringIO()
+
+                with (
+                    patch(
+                        "futures_intelligence.main.load_yaml_file",
+                        return_value=registry,
+                    ),
+                    patch(
+                        "futures_intelligence.main.CollectorFactory.create",
+                        return_value=collector,
+                    ) as create,
+                    patch("futures_intelligence.main.InformationRanker", return_value=ranker),
+                    patch("futures_intelligence.main.AnalystRouter") as router_class,
+                    patch("futures_intelligence.main.CommodityMatcher") as matcher_class,
+                    redirect_stdout(output),
+                ):
+                    exit_code = _run_htfc_pdf_analysis_evaluation()
+
+                self.assertEqual(exit_code, 1)
+                self.assertNotIn(
+                    "deterministic analysis evaluation succeeded", output.getvalue()
+                )
+                router_class.assert_not_called()
+                matcher_class.assert_not_called()
+                self.assertFalse(source["enabled"])
+                self.assertEqual(source["pdf_extraction"]["max_selected_pdfs"], 3)
+                self.assertTrue(create.call_args.args[0]["enabled"])
+
+    def test_huatai_pdf_analysis_evaluation_preserves_equal_valued_identities_when_ranked(
+        self,
+    ) -> None:
+        first = _huatai_pdf_market_information()
+        second = _huatai_pdf_market_information()
+        self.assertIsNot(first, second)
+        self.assertEqual(first, second)
+        source = _huatai_pdf_source()
+        registry = {
+            "sources": {"research_reports": {"futures_companies": [source]}}
+        }
+        collector = Mock()
+        collector.collect.return_value = [first, second]
+        ranker = Mock()
+        ranker.rank.return_value = [second, first]
+        router = Mock()
+        router.analyze.return_value = [
+            MarketAnalysis(second, "Second."),
+            MarketAnalysis(first, "First."),
+        ]
+        matcher = Mock()
+        matcher.match.return_value = ()
+        output = StringIO()
+
+        with (
+            patch("futures_intelligence.main.load_yaml_file", return_value=registry),
+            patch(
+                "futures_intelligence.main.CollectorFactory.create",
+                return_value=collector,
+            ),
+            patch("futures_intelligence.main.InformationRanker", return_value=ranker),
+            patch("futures_intelligence.main.AnalystRouter", return_value=router),
+            patch("futures_intelligence.main.CommodityMatcher", return_value=matcher),
+            redirect_stdout(output),
+        ):
+            exit_code = _run_htfc_pdf_analysis_evaluation()
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(router.analyze.call_args.args[0], [second, first])
+        self.assertIs(router.analyze.call_args.args[0][0], second)
+        self.assertIs(router.analyze.call_args.args[0][1], first)
+        collection_indexes = [
+            line
+            for line in output.getvalue().splitlines()
+            if line.startswith("Collection Index: ")
+        ]
+        ranked_indexes = [
+            line
+            for line in output.getvalue().splitlines()
+            if line.startswith("Ranked Index: ")
+        ]
+        self.assertEqual(collection_indexes, ["Collection Index: 2", "Collection Index: 1"])
+        self.assertEqual(ranked_indexes, ["Ranked Index: 1", "Ranked Index: 2"])
 
     def test_huatai_pdf_collector_smoke_test_uses_detached_exact_source_and_prints_provenance(
         self,

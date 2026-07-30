@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from collections.abc import Mapping
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from futures_intelligence.analyst import AnalystRouter, LLMCandidateSelector, LLMAnalyst
+from futures_intelligence.analyst import (
+    AnalystRouter,
+    LLMCandidateSelector,
+    LLMAnalyst,
+)
+from futures_intelligence.analyst.commodity_matcher import CommodityMatch, CommodityMatcher
 from futures_intelligence.analyst.llm import _openai_client_for_smoke_test
 from futures_intelligence.collectors.research_report import ResearchReportCollector
 from futures_intelligence.collectors.factory import CollectorFactory
@@ -44,6 +50,7 @@ SMOKE_TEST_REPORT_PATH = (
 )
 HTFC_LISTING_URL = "https://htfc.com/main/yjzx/ssrdph/index.shtml"
 HTFC_PDF_COLLECTOR_MODE = "huatai_pdf_listing"
+HTFC_PDF_ANALYSIS_EVALUATION_LIMIT = 3
 
 
 class _HuataiSmokeTestFailure(RuntimeError):
@@ -68,6 +75,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_htfc_pdf_collector_smoke_test()
     if arguments.command == "htfc-pdf-analysis-smoke-test":
         return _run_htfc_pdf_analysis_smoke_test()
+    if arguments.command == "htfc-pdf-analysis-eval":
+        return _run_htfc_pdf_analysis_evaluation()
     return 1
 
 
@@ -101,6 +110,10 @@ def _parse_arguments(argv: list[str] | None) -> argparse.Namespace:
     commands.add_parser(
         "htfc-pdf-analysis-smoke-test",
         help="Run one isolated Huatai Futures PDF analysis integration smoke test.",
+    )
+    commands.add_parser(
+        "htfc-pdf-analysis-eval",
+        help="Evaluate up to three Huatai Futures PDF reports with deterministic analysis.",
     )
     return parser.parse_args(argv)
 
@@ -295,31 +308,211 @@ def _run_htfc_pdf_analysis_smoke_test() -> int:
     return 0
 
 
+def _run_htfc_pdf_analysis_evaluation() -> int:
+    """Evaluate a fixed small Huatai PDF batch without production side effects."""
+    try:
+        collected_information = _collect_bounded_htfc_pdf_market_information(
+            HTFC_PDF_ANALYSIS_EVALUATION_LIMIT
+        )
+    except OSError as error:
+        print(
+            "Huatai Futures PDF analysis evaluation failed: "
+            f"{_htfc_error_message(error)}"
+        )
+        return 1
+    except HuataiListingStructureError:
+        print(
+            "Huatai Futures PDF analysis evaluation failed: "
+            "Huatai Futures report listing structure was not recognized."
+        )
+        return 1
+    except _HuataiSmokeTestFailure as error:
+        print(f"Huatai Futures PDF analysis evaluation failed: {error}")
+        return 1
+
+    try:
+        ranked_information, analyses, commodity_matches = _evaluate_htfc_pdf_information(
+            collected_information
+        )
+    except _HuataiSmokeTestFailure as error:
+        print(f"Huatai Futures PDF analysis evaluation failed: {error}")
+        return 1
+
+    _print_htfc_pdf_analysis_evaluation(
+        collected_information,
+        ranked_information,
+        analyses,
+        commodity_matches,
+    )
+    return 0
+
+
 def _collect_one_htfc_pdf_market_information() -> MarketInformation:
     """Collect exactly one normalized Huatai PDF item using detached configuration."""
-    try:
-        source_registry = load_yaml_file(CONFIGURATION_FILES["sources"])
-    except FileNotFoundError as error:
-        raise _HuataiSmokeTestFailure("source registry could not be loaded.") from error
-    source = _find_htfc_pdf_collector_source(source_registry)
-    smoke_source = _htfc_pdf_collector_smoke_source(source)
-    collector = CollectorFactory.create(smoke_source)
-    if collector is None:
-        raise _HuataiSmokeTestFailure("factory did not create a collector.")
-
-    information = collector.collect()
+    information = _collect_bounded_htfc_pdf_market_information(1)
     if not information:
         raise _HuataiSmokeTestFailure("no MarketInformation item was produced.")
     if len(information) != 1:
         raise _HuataiSmokeTestFailure(
             f"expected exactly one MarketInformation item, received {len(information)}."
         )
-    item = information[0]
-    if not isinstance(item, MarketInformation):
+    return information[0]
+
+
+def _collect_bounded_htfc_pdf_market_information(
+    max_selected_pdfs: int,
+) -> list[MarketInformation]:
+    """Collect a validated bounded Huatai PDF batch using detached configuration."""
+    if (
+        isinstance(max_selected_pdfs, bool)
+        or not isinstance(max_selected_pdfs, int)
+        or max_selected_pdfs < 1
+    ):
+        raise _HuataiSmokeTestFailure("Huatai PDF collection limit must be positive.")
+    try:
+        source_registry = load_yaml_file(CONFIGURATION_FILES["sources"])
+    except FileNotFoundError as error:
+        raise _HuataiSmokeTestFailure("source registry could not be loaded.") from error
+    source = _find_htfc_pdf_collector_source(source_registry)
+    smoke_source = _htfc_pdf_collector_smoke_source(source, max_selected_pdfs)
+    collector = CollectorFactory.create(smoke_source)
+    if collector is None:
+        raise _HuataiSmokeTestFailure("factory did not create a collector.")
+
+    information = collector.collect()
+    if not isinstance(information, list):
+        raise _HuataiSmokeTestFailure("collector did not return a list of MarketInformation.")
+    if not all(isinstance(item, MarketInformation) for item in information):
         raise _HuataiSmokeTestFailure(
             "collector did not return a MarketInformation item."
         )
-    return item
+    return information
+
+
+def _evaluate_htfc_pdf_information(
+    collected_information: list[MarketInformation],
+) -> tuple[
+    list[MarketInformation],
+    list[MarketAnalysis],
+    tuple[tuple[CommodityMatch, ...], ...],
+]:
+    """Rank, analyze, and label a non-empty bounded batch without side effects."""
+    if not collected_information:
+        raise _HuataiSmokeTestFailure("no MarketInformation items were produced.")
+    if len(collected_information) > HTFC_PDF_ANALYSIS_EVALUATION_LIMIT:
+        raise _HuataiSmokeTestFailure(
+            "collector returned more MarketInformation items than the evaluation limit."
+        )
+    if len({id(item) for item in collected_information}) != len(collected_information):
+        raise _HuataiSmokeTestFailure(
+            "collector returned duplicate MarketInformation object identities."
+        )
+
+    ranked_information = InformationRanker().rank(collected_information)
+    _validate_ranked_htfc_information(collected_information, ranked_information)
+
+    analyses = AnalystRouter().analyze(ranked_information)
+    _validate_htfc_analyses(ranked_information, analyses)
+    _validate_htfc_direction_counts(analyses)
+
+    matcher = CommodityMatcher()
+    commodity_matches = tuple(
+        _validated_htfc_commodity_matches(matcher.match(item))
+        for item in ranked_information
+    )
+    return ranked_information, analyses, commodity_matches
+
+
+def _validate_ranked_htfc_information(
+    collected_information: list[MarketInformation],
+    ranked_information: object,
+) -> None:
+    """Require ranker output to contain each collected object exactly once."""
+    if not isinstance(ranked_information, list):
+        raise _HuataiSmokeTestFailure(
+            "ranker did not return a list of MarketInformation items."
+        )
+    if len(ranked_information) != len(collected_information):
+        raise _HuataiSmokeTestFailure(
+            "ranker did not return the same number of MarketInformation items."
+        )
+    if not all(isinstance(item, MarketInformation) for item in ranked_information):
+        raise _HuataiSmokeTestFailure(
+            "ranker did not return MarketInformation items."
+        )
+    if Counter(map(id, ranked_information)) != Counter(map(id, collected_information)):
+        raise _HuataiSmokeTestFailure(
+            "ranker did not preserve the collected MarketInformation identities."
+        )
+
+
+def _validate_htfc_analyses(
+    ranked_information: list[MarketInformation],
+    analyses: object,
+) -> None:
+    """Require one valid provenance-preserving analysis per ranked item."""
+    if not isinstance(analyses, list):
+        raise _HuataiSmokeTestFailure(
+            "router did not return a list of MarketAnalysis items."
+        )
+    if len(analyses) != len(ranked_information):
+        raise _HuataiSmokeTestFailure(
+            "router did not return the same number of MarketAnalysis items."
+        )
+    for ranked_item, analysis in zip(ranked_information, analyses):
+        if not isinstance(analysis, MarketAnalysis):
+            raise _HuataiSmokeTestFailure("router did not return a MarketAnalysis item.")
+        if analysis.market_information is not ranked_item:
+            raise _HuataiSmokeTestFailure(
+                "analysis did not preserve ranked MarketInformation provenance."
+            )
+        try:
+            canonical = MarketAnalysis(
+                analysis.market_information,
+                analysis.summary,
+                analysis.market_direction,
+                analysis.confidence_score,
+                analysis.reasoning_details,
+            )
+        except (TypeError, ValueError) as error:
+            raise _HuataiSmokeTestFailure(
+                "router returned an invalid MarketAnalysis item."
+            ) from error
+        if (
+            canonical.market_information is not ranked_item
+            or analysis.summary != canonical.summary
+            or analysis.market_direction != canonical.market_direction
+            or analysis.confidence_score != canonical.confidence_score
+            or analysis.reasoning_details != canonical.reasoning_details
+        ):
+            raise _HuataiSmokeTestFailure(
+                "router returned a non-canonical MarketAnalysis item."
+            )
+
+
+def _validate_htfc_direction_counts(analyses: list[MarketAnalysis]) -> None:
+    """Require every accepted analysis to contribute to exactly one direction count."""
+    counted_analyses = sum(
+        analysis.market_direction in {"bullish", "bearish", "neutral"}
+        for analysis in analyses
+    )
+    if counted_analyses != len(analyses):
+        raise _HuataiSmokeTestFailure(
+            "analysis directions did not match the aggregate direction counts."
+        )
+
+
+def _validated_htfc_commodity_matches(
+    matches: object,
+) -> tuple[CommodityMatch, ...]:
+    """Require the public immutable matcher result contract for diagnostics."""
+    if type(matches) is not tuple or not all(
+        isinstance(match, CommodityMatch) for match in matches
+    ):
+        raise _HuataiSmokeTestFailure(
+            "matcher did not return a tuple of CommodityMatch values."
+        )
+    return matches
 
 
 def _analyze_one_htfc_pdf_market_information(item: MarketInformation) -> MarketAnalysis:
@@ -395,6 +588,59 @@ def _print_htfc_pdf_analysis_smoke_result(
         print(f"- {_truncate_smoke_text(detail, 240)}")
 
 
+def _print_htfc_pdf_analysis_evaluation(
+    collected_information: list[MarketInformation],
+    ranked_information: list[MarketInformation],
+    analyses: list[MarketAnalysis],
+    commodity_matches: tuple[tuple[CommodityMatch, ...], ...],
+) -> None:
+    """Print a bounded diagnostic summary without exposing report content."""
+    print("Huatai Futures PDF deterministic analysis evaluation succeeded.")
+    print(f"Requested PDF Limit: {HTFC_PDF_ANALYSIS_EVALUATION_LIMIT}")
+    print(f"Collected MarketInformation Count: {len(collected_information)}")
+    print(f"Analyzed MarketAnalysis Count: {len(analyses)}")
+    for direction in ("bullish", "bearish", "neutral"):
+        print(
+            f"{direction.capitalize()} Count: "
+            f"{sum(analysis.market_direction == direction for analysis in analyses)}"
+        )
+
+    collection_indexes = {
+        id(item): index for index, item in enumerate(collected_information, start=1)
+    }
+    for ranked_index, (item, analysis, matches) in enumerate(
+        zip(ranked_information, analyses, commodity_matches),
+        start=1,
+    ):
+        print()
+        print(f"Report Index: {ranked_index}")
+        print(f"Collection Index: {collection_indexes[id(item)]}")
+        print(f"Ranked Index: {ranked_index}")
+        print(f"Title: {_truncate_smoke_text(item.title, 500)}")
+        print(f"Published Time: {item.published_time.isoformat()}")
+        print(f"Canonical PDF URL: {item.url or 'unavailable'}")
+        print(f"Source Commodities: {_smoke_text_tuple(item.commodities)}")
+        print(
+            "Detected Commodity Matches: "
+            f"{_smoke_text_tuple(_commodity_match_labels(matches))}"
+        )
+        print(f"Analysis Summary: {_truncate_smoke_text(analysis.summary, 500)}")
+        print(f"Market Direction: {analysis.market_direction}")
+        print(f"Confidence Score: {analysis.confidence_score}")
+        print(f"Reasoning Detail Count: {len(analysis.reasoning_details)}")
+        print("Reasoning Details:")
+        if not analysis.reasoning_details:
+            print("- none")
+            continue
+        for detail in analysis.reasoning_details[:3]:
+            print(f"- {_truncate_smoke_text(detail, 240)}")
+
+
+def _commodity_match_labels(matches: tuple[CommodityMatch, ...]) -> tuple[str, ...]:
+    """Return only public matcher labels for bounded diagnostic output."""
+    return tuple(match.commodity_label for match in matches)
+
+
 def _truncate_smoke_text(value: str, maximum_characters: int) -> str:
     """Return deterministic bounded terminal text with an explicit truncation marker."""
     if len(value) <= maximum_characters:
@@ -442,7 +688,10 @@ def _source_configuration_entries(value: object) -> tuple[dict[str, Any], ...]:
     )
 
 
-def _htfc_pdf_collector_smoke_source(source: Mapping[str, Any]) -> dict[str, Any]:
+def _htfc_pdf_collector_smoke_source(
+    source: Mapping[str, Any],
+    max_selected_pdfs: int = 1,
+) -> dict[str, Any]:
     """Make the sole permitted detached in-memory collector smoke overrides."""
     smoke_source = deepcopy(dict(source))
     pdf_extraction = smoke_source.get("pdf_extraction")
@@ -451,7 +700,7 @@ def _htfc_pdf_collector_smoke_source(source: Mapping[str, Any]) -> dict[str, Any
             "Huatai Futures PDF collector source requires pdf_extraction."
         )
     smoke_source["enabled"] = True
-    pdf_extraction["max_selected_pdfs"] = 1
+    pdf_extraction["max_selected_pdfs"] = max_selected_pdfs
     return smoke_source
 
 
