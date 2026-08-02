@@ -32,6 +32,23 @@ class CommodityMatch:
     matched_aliases: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class _AliasCandidate:
+    """One private alias occurrence used for deterministic overlap resolution."""
+
+    field_index: int
+    commodity_index: int
+    alias_index: int
+    alias: str
+    start: int
+    end: int
+
+    @property
+    def span_length(self) -> int:
+        """Return the complete matched span length for global priority sorting."""
+        return self.end - self.start
+
+
 class CommodityMatcher:
     """Match configured commodities against original information title and content."""
 
@@ -58,37 +75,130 @@ class CommodityMatcher:
 
     def match(self, information: MarketInformation) -> tuple[CommodityMatch, ...]:
         """Return title/content-supported commodity matches in configured order."""
-        text = f"{information.title} {information.content}"
-        matches: list[CommodityMatch] = []
-        for definition in self._definitions:
-            aliases = tuple(
-                alias
-                for alias in sorted(definition.aliases, key=len, reverse=True)
-                if self._alias_matches(text, alias)
+        selected_candidates = self._resolve_overlaps(
+            self._collect_candidates(information.title, field_index=0)
+            + self._collect_candidates(information.content, field_index=1)
+        )
+        selected_aliases: dict[int, set[int]] = {}
+        for candidate in selected_candidates:
+            selected_aliases.setdefault(candidate.commodity_index, set()).add(
+                candidate.alias_index
             )
-            if aliases:
-                matches.append(
-                    CommodityMatch(
-                        commodity_key=definition.commodity_key,
-                        commodity_label=definition.commodity_label,
-                        matched_aliases=aliases,
-                    )
-                )
-        return tuple(matches)
 
-    def _alias_matches(self, text: str, alias: str) -> bool:
-        """Apply explicit phrase exclusions before matching an ambiguous alias."""
+        return tuple(
+            CommodityMatch(
+                commodity_key=definition.commodity_key,
+                commodity_label=definition.commodity_label,
+                matched_aliases=tuple(
+                    alias
+                    for _, alias in sorted(
+                        (
+                            (alias_index, alias)
+                            for alias_index, alias in enumerate(definition.aliases)
+                            if alias_index
+                            in selected_aliases.get(commodity_index, set())
+                        ),
+                        key=lambda item: (-len(item[1]), item[0]),
+                    )
+                ),
+            )
+            for commodity_index, definition in enumerate(self._definitions)
+            if commodity_index in selected_aliases
+        )
+
+    def _collect_candidates(
+        self,
+        text: str,
+        *,
+        field_index: int,
+    ) -> tuple[_AliasCandidate, ...]:
+        """Collect every non-excluded configured alias occurrence in stable order."""
+        normalized_text = text.casefold()
+        candidates: list[_AliasCandidate] = []
+        for commodity_index, definition in enumerate(self._definitions):
+            for alias_index, alias in enumerate(definition.aliases):
+                exclusion_spans = self._exclusion_spans(normalized_text, alias)
+                for match in re.finditer(_alias_pattern(alias), normalized_text):
+                    if any(
+                        _spans_overlap(match.start(), match.end(), start, end)
+                        for start, end in exclusion_spans
+                    ):
+                        continue
+                    candidates.append(
+                        _AliasCandidate(
+                            field_index,
+                            commodity_index,
+                            alias_index,
+                            alias,
+                            match.start(),
+                            match.end(),
+                        )
+                    )
+        return tuple(candidates)
+
+    def _exclusion_spans(self, text: str, alias: str) -> tuple[tuple[int, int], ...]:
+        """Return local spans where an ambiguous alias is not article evidence."""
         exclusions = self._ambiguous_alias_exclusions.get(alias.casefold(), ())
-        if any(phrase_matches(text, phrase) for phrase in exclusions):
-            return False
-        return phrase_matches(text, alias)
+        return tuple(
+            (match.start(), match.end())
+            for phrase in exclusions
+            for match in re.finditer(_alias_pattern(phrase), text)
+        )
+
+    @staticmethod
+    def _resolve_overlaps(
+        candidates: tuple[_AliasCandidate, ...],
+    ) -> tuple[_AliasCandidate, ...]:
+        """Prefer longest global spans, then stable registry and alias order."""
+        selected: list[_AliasCandidate] = []
+        for candidate in sorted(
+            candidates,
+            key=lambda item: (
+                -item.span_length,
+                item.commodity_index,
+                item.alias_index,
+                item.field_index,
+                item.start,
+            ),
+        ):
+            if any(
+                candidate.field_index == prior.field_index
+                and _spans_overlap(
+                    candidate.start,
+                    candidate.end,
+                    prior.start,
+                    prior.end,
+                )
+                for prior in selected
+            ):
+                continue
+            selected.append(candidate)
+        return tuple(selected)
 
 
 def phrase_matches(text: str, phrase: str) -> bool:
     """Match a configured phrase outside larger tokens, allowing punctuation separators."""
-    parts = phrase.casefold().split()
+    return re.search(_alias_pattern(phrase), text.casefold()) is not None
+
+
+def _alias_pattern(alias: str) -> str:
+    """Build escaped phrase matching with ASCII-only word-edge protection."""
+    normalized_alias = alias.casefold()
+    parts = normalized_alias.split()
     pattern = r"(?:[\W_]+)".join(re.escape(part) for part in parts)
-    return re.search(rf"(?<!\w){pattern}(?!\w)", text.casefold()) is not None
+    prefix = r"(?<![A-Za-z0-9_])" if _is_ascii_word_character(normalized_alias[0]) else ""
+    suffix = r"(?![A-Za-z0-9_])" if _is_ascii_word_character(normalized_alias[-1]) else ""
+    return f"{prefix}{pattern}{suffix}"
+
+
+def _is_ascii_word_character(character: str) -> bool:
+    """Return whether one character needs an ASCII token boundary."""
+    return character.isascii() and (character.isalnum() or character == "_")
+
+
+def _spans_overlap(first_start: int, first_end: int, second_start: int, second_end: int) -> bool:
+    """Return whether two non-empty string spans share any characters."""
+    return first_start < second_end and second_start < first_end
 
 
 def _load_commodity_registry() -> tuple[
@@ -109,6 +219,7 @@ def _load_commodity_registry() -> tuple[
             return
         if not key or not label or not aliases:
             raise ValueError("Each commodity entry must define a key, label, and aliases")
+        _validate_aliases(key, aliases)
         definitions.append(
             CommodityDefinition(key, label, tuple(alias.casefold() for alias in aliases))
         )
@@ -142,28 +253,99 @@ def _load_commodity_registry() -> tuple[
             section = "ambiguous_alias_exclusions"
         elif section == "commodities" and indentation == 2 and stripped.endswith(":"):
             add_definition()
-            key = stripped.removesuffix(":").strip()
+            key = _parse_string_scalar(
+                stripped.removesuffix(":").strip(),
+                "commodity key",
+            )
             label = None
             aliases = []
         elif section == "commodities" and indentation == 4 and stripped.startswith("label:"):
-            label = stripped.removeprefix("label:").strip()
+            label = _parse_string_scalar(
+                stripped.removeprefix("label:").strip(),
+                f"Commodity {key or '<unknown>'} label",
+            )
         elif section == "commodities" and indentation == 4 and stripped == "aliases:":
             continue
         elif section == "commodities" and indentation == 6 and stripped.startswith("- "):
-            aliases.append(stripped.removeprefix("- ").strip())
+            aliases.append(
+                _parse_string_scalar(
+                    stripped.removeprefix("- ").strip(),
+                    f"Commodity {key or '<unknown>'} alias",
+                )
+            )
         elif section == "ambiguous_alias_exclusions" and indentation == 2 and stripped.endswith(":"):
             add_exclusions()
-            excluded_alias = stripped.removesuffix(":").strip()
+            excluded_alias = _parse_string_scalar(
+                stripped.removesuffix(":").strip(),
+                "Ambiguous alias reference",
+            )
             excluded_phrases = []
         elif (
             section == "ambiguous_alias_exclusions"
             and indentation == 4
             and stripped.startswith("- ")
         ):
-            excluded_phrases.append(stripped.removeprefix("- ").strip())
+            excluded_phrases.append(
+                _parse_string_scalar(
+                    stripped.removeprefix("- ").strip(),
+                    f"Ambiguous alias {excluded_alias or '<unknown>'} exclusion phrase",
+                )
+            )
         else:
             raise ValueError(f"Invalid commodity keyword entry: {line}")
 
     add_definition()
     add_exclusions()
     return tuple(definitions), tuple(exclusions)
+
+
+def _validate_aliases(commodity_key: str, aliases: list[str]) -> None:
+    """Reject malformed registry entries and unsafe one-character CJK aliases."""
+    for alias in aliases:
+        if not alias:
+            raise ValueError(f"Commodity {commodity_key} has an invalid alias")
+        if len(alias) == 1 and _is_cjk_ideograph(alias):
+            raise ValueError(
+                f"Commodity {commodity_key} has an unsafe one-character CJK alias"
+            )
+
+
+_PLAIN_NON_STRING_SCALAR = re.compile(
+    r"(?:[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?|"
+    r"0[xX][0-9A-Fa-f]+|0[oO][0-7]+|0[bB][01]+)$"
+)
+_PLAIN_BOOLEAN_OR_NULL = frozenset({"true", "false", "null", "~"})
+
+
+def _parse_string_scalar(value: str, field: str) -> str:
+    """Parse one required string scalar while rejecting YAML non-string forms."""
+    scalar = value.strip()
+    if not scalar or scalar[0] in "[{":
+        raise ValueError(f"{field} must be a non-empty string")
+
+    if scalar[0] in "\"'":
+        if len(scalar) < 2 or scalar[-1] != scalar[0]:
+            raise ValueError(f"{field} must be a valid string scalar")
+        scalar = scalar[1:-1]
+        if not scalar.strip():
+            raise ValueError(f"{field} must be a non-empty string")
+        return scalar
+
+    if scalar[-1] in "\"'":
+        raise ValueError(f"{field} must be a valid string scalar")
+    if (
+        scalar.casefold() in _PLAIN_BOOLEAN_OR_NULL
+        or _PLAIN_NON_STRING_SCALAR.fullmatch(scalar) is not None
+    ):
+        raise ValueError(f"{field} must be a string scalar")
+    return scalar
+
+
+def _is_cjk_ideograph(value: str) -> bool:
+    """Recognize the CJK ranges relevant to the reviewed registry policy."""
+    code_point = ord(value)
+    return (
+        0x3400 <= code_point <= 0x4DBF
+        or 0x4E00 <= code_point <= 0x9FFF
+        or 0xF900 <= code_point <= 0xFAFF
+    )

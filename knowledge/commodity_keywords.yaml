@@ -7,6 +7,21 @@ commodities:
       - crude
       - brent
       - wti
+      - 原油
+      - WTI原油
+      - 布伦特原油
+  fuel_oil:
+    label: Fuel Oil
+    aliases:
+      - fuel oil
+      - 燃料油
+  low_sulfur_fuel_oil:
+    label: Low-Sulfur Fuel Oil
+    aliases:
+      - low sulfur fuel oil
+      - low-sulfur fuel oil
+      - 低硫燃料油
+      - 低硫燃油
   butadiene_rubber:
     label: Butadiene Rubber
     aliases:
@@ -23,6 +38,14 @@ commodities:
     label: Aluminum
     aliases:
       - aluminum
+      - 原铝
+      - 电解铝
+      - 铝锭
+  cast_aluminum_alloy:
+    label: Cast Aluminum Alloy
+    aliases:
+      - cast aluminum alloy
+      - 铸造铝合金
   silver:
     label: Silver
     aliases:
@@ -43,14 +66,22 @@ commodities:
     label: Soybean Meal
     aliases:
       - soybean meal
+      - 豆粕
   corn:
     label: Corn
     aliases:
       - corn
+      - 玉米
   wheat:
     label: Wheat
     aliases:
       - wheat
+      - 小麦
+  live_hog:
+    label: Live Hog
+    aliases:
+      - 生猪
+      - 生猪期货
 
 ambiguous_alias_exclusions:
   oil:
