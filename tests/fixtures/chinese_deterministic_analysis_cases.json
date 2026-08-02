@@ -1,0 +1,586 @@
+{
+  "schema_version": 1,
+  "active_enforcement_phases": [],
+  "cases": [
+    {
+      "id": "live-hog-basic-identity",
+      "title": "生猪现货成交平稳。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["commodity_identity", "live_hog", "agriculture", "neutral"],
+      "expected": {"commodity_keys": ["live_hog"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["live_hog_identity"], "signal_kind": "commodity_identity_only"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "not_applicable"},
+      "notes": "Exact live-hog identity without an outright signal."
+    },
+    {
+      "id": "live-hog-futures-identity",
+      "title": "生猪期货交投活跃。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["commodity_identity", "live_hog", "agriculture", "neutral"],
+      "expected": {"commodity_keys": ["live_hog"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["live_hog_futures_identity"], "signal_kind": "commodity_identity_only"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "not_applicable"},
+      "notes": "Futures wording remains an identity-only case."
+    },
+    {
+      "id": "pork-context-not-live-hog",
+      "title": "猪肉消费进入旺季。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["commodity_identity", "live_hog", "demand", "agriculture", "neutral"],
+      "expected": {"commodity_keys": [], "no_commodity_keys": ["live_hog"], "market_direction": "neutral", "reasoning_tags": ["downstream_pork_context"], "signal_kind": "commodity_identity_only"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "not_applicable"},
+      "notes": "Pork is downstream context, not automatic live-hog identity."
+    },
+    {
+      "id": "crude-oil-chinese-identity",
+      "title": "原油市场成交平稳。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["commodity_identity", "petroleum", "energy", "neutral"],
+      "expected": {"commodity_keys": ["crude_oil"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["crude_oil_identity"], "signal_kind": "commodity_identity_only"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "not_applicable"},
+      "notes": "Exact Chinese crude-oil phrase."
+    },
+    {
+      "id": "wti-crude-oil-identity",
+      "title": "WTI原油库存周报发布。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["commodity_identity", "petroleum", "energy", "inventory", "neutral"],
+      "expected": {"commodity_keys": ["crude_oil"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["wti_crude_oil_identity"], "signal_kind": "commodity_identity_only"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "not_applicable"},
+      "notes": "Identifier coverage without inferring an inventory direction."
+    },
+    {
+      "id": "brent-crude-oil-identity",
+      "title": "布伦特原油月度数据更新。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["commodity_identity", "petroleum", "energy", "neutral"],
+      "expected": {"commodity_keys": ["crude_oil"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["brent_crude_oil_identity"], "signal_kind": "commodity_identity_only"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "not_applicable"},
+      "notes": "Exact Brent crude identity."
+    },
+    {
+      "id": "fuel-oil-identity",
+      "title": "燃料油船货到港。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["commodity_identity", "petroleum", "energy", "neutral"],
+      "expected": {"commodity_keys": ["fuel_oil"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["fuel_oil_identity"], "signal_kind": "commodity_identity_only"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "not_applicable"},
+      "notes": "Generic fuel oil is distinct from low-sulfur fuel oil."
+    },
+    {
+      "id": "low-sulfur-fuel-oil-identity",
+      "title": "低硫燃料油现货报价更新。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["commodity_identity", "petroleum", "energy", "neutral"],
+      "expected": {"commodity_keys": ["low_sulfur_fuel_oil"], "no_commodity_keys": ["fuel_oil"], "market_direction": "neutral", "reasoning_tags": ["low_sulfur_fuel_oil_identity"], "signal_kind": "commodity_identity_only"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "not_applicable"},
+      "notes": "Specific low-sulfur product must outrank generic fuel oil."
+    },
+    {
+      "id": "refined-products-unmatched",
+      "title": "成品油消费数据发布。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["commodity_identity", "petroleum", "energy", "neutral"],
+      "expected": {"commodity_keys": [], "no_commodity_keys": ["crude_oil", "fuel_oil", "low_sulfur_fuel_oil"], "market_direction": "neutral", "reasoning_tags": ["broad_refined_products_context"], "signal_kind": "commodity_identity_only"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "not_applicable"},
+      "notes": "Broad refined products do not identify a specific futures commodity."
+    },
+    {
+      "id": "crude-and-fuel-oil-identity",
+      "title": "原油与燃料油库存同步变化。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["commodity_identity", "petroleum", "energy", "inventory", "neutral"],
+      "expected": {"commodity_keys": ["crude_oil", "fuel_oil"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["multiple_petroleum_identities"], "signal_kind": "commodity_identity_only"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "not_applicable"},
+      "notes": "Two explicit tradable petroleum products may match together."
+    },
+    {
+      "id": "primary-aluminum-identity",
+      "title": "原铝报价保持平稳。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["commodity_identity", "aluminum", "metals", "neutral"],
+      "expected": {"commodity_keys": ["aluminum"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["primary_aluminum_identity"], "signal_kind": "commodity_identity_only"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "not_applicable"},
+      "notes": "Primary aluminum identity."
+    },
+    {
+      "id": "electrolytic-aluminum-identity",
+      "title": "电解铝库存周报更新。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["commodity_identity", "aluminum", "metals", "inventory", "neutral"],
+      "expected": {"commodity_keys": ["aluminum"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["electrolytic_aluminum_identity"], "signal_kind": "commodity_identity_only"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "not_applicable"},
+      "notes": "Electrolytic aluminum remains primary aluminum."
+    },
+    {
+      "id": "aluminum-ingot-identity",
+      "title": "铝锭现货到货量公布。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["commodity_identity", "aluminum", "metals", "neutral"],
+      "expected": {"commodity_keys": ["aluminum"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["aluminum_ingot_identity"], "signal_kind": "commodity_identity_only"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "not_applicable"},
+      "notes": "Aluminum ingot maps to primary aluminum."
+    },
+    {
+      "id": "cast-aluminum-alloy-identity",
+      "title": "铸造铝合金需求月报更新。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["commodity_identity", "aluminum", "metals", "neutral"],
+      "expected": {"commodity_keys": ["cast_aluminum_alloy"], "no_commodity_keys": ["aluminum"], "market_direction": "neutral", "reasoning_tags": ["cast_aluminum_alloy_identity"], "signal_kind": "commodity_identity_only"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "not_applicable"},
+      "notes": "Specific cast alloy must not collapse into primary aluminum."
+    },
+    {
+      "id": "generic-aluminum-alloy-unmatched",
+      "title": "普通铝合金加工订单更新。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["commodity_identity", "aluminum", "metals", "neutral"],
+      "expected": {"commodity_keys": [], "no_commodity_keys": ["cast_aluminum_alloy"], "market_direction": "neutral", "reasoning_tags": ["generic_alloy_context"], "signal_kind": "commodity_identity_only"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "not_applicable"},
+      "notes": "Generic alloy is not automatically the listed cast alloy."
+    },
+    {
+      "id": "alumina-not-primary-aluminum",
+      "title": "氧化铝价格数据更新。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["commodity_identity", "aluminum", "metals", "neutral"],
+      "expected": {"commodity_keys": [], "no_commodity_keys": ["aluminum"], "market_direction": "neutral", "reasoning_tags": ["alumina_separate_taxonomy"], "signal_kind": "commodity_identity_only"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "not_applicable"},
+      "notes": "Alumina requires a future taxonomy decision."
+    },
+    {
+      "id": "crude-oil-supply-tightening",
+      "title": "原油供应收紧。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["observed_fact", "supply", "bullish", "petroleum", "energy"],
+      "expected": {"commodity_keys": ["crude_oil"], "no_commodity_keys": [], "market_direction": "bullish", "reasoning_tags": ["supply_tightening"], "signal_kind": "fundamental_fact"},
+      "enforcement": {"commodity": "g2", "direction": "g3a", "relative_value": "not_applicable"},
+      "notes": "Unqualified supply tightening is bullish fundamental evidence."
+    },
+    {
+      "id": "fuel-oil-supply-reduction",
+      "title": "燃料油供给减少。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["observed_fact", "supply", "bullish", "petroleum", "energy"],
+      "expected": {"commodity_keys": ["fuel_oil"], "no_commodity_keys": [], "market_direction": "bullish", "reasoning_tags": ["supply_reduction"], "signal_kind": "fundamental_fact"},
+      "enforcement": {"commodity": "g2", "direction": "g3a", "relative_value": "not_applicable"},
+      "notes": "Unqualified supply reduction is bullish evidence."
+    },
+    {
+      "id": "live-hog-inventory-decline",
+      "title": "生猪库存下降。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["observed_fact", "inventory", "bullish", "live_hog", "agriculture"],
+      "expected": {"commodity_keys": ["live_hog"], "no_commodity_keys": [], "market_direction": "bullish", "reasoning_tags": ["inventory_decline"], "signal_kind": "fundamental_fact"},
+      "enforcement": {"commodity": "g2", "direction": "g3a", "relative_value": "not_applicable"},
+      "notes": "Observed inventory decline is bullish evidence."
+    },
+    {
+      "id": "electrolytic-aluminum-destock",
+      "title": "电解铝库存去化。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["observed_fact", "inventory", "bullish", "aluminum", "metals"],
+      "expected": {"commodity_keys": ["aluminum"], "no_commodity_keys": [], "market_direction": "bullish", "reasoning_tags": ["inventory_destock"], "signal_kind": "fundamental_fact"},
+      "enforcement": {"commodity": "g2", "direction": "g3a", "relative_value": "not_applicable"},
+      "notes": "Observed destocking is bullish evidence."
+    },
+    {
+      "id": "wheat-demand-improvement",
+      "title": "小麦需求改善。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["observed_fact", "demand", "bullish", "agriculture"],
+      "expected": {"commodity_keys": ["wheat"], "no_commodity_keys": [], "market_direction": "bullish", "reasoning_tags": ["demand_improvement"], "signal_kind": "fundamental_fact"},
+      "enforcement": {"commodity": "g2", "direction": "g3a", "relative_value": "not_applicable"},
+      "notes": "Unqualified demand improvement is bullish evidence."
+    },
+    {
+      "id": "corn-cost-support",
+      "title": "玉米成本支撑增强。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["observed_fact", "cost", "bullish", "agriculture"],
+      "expected": {"commodity_keys": ["corn"], "no_commodity_keys": [], "market_direction": "bullish", "reasoning_tags": ["cost_support"], "signal_kind": "fundamental_fact"},
+      "enforcement": {"commodity": "g2", "direction": "g3a", "relative_value": "not_applicable"},
+      "notes": "Unqualified cost support is bullish fundamental evidence."
+    },
+    {
+      "id": "crude-oil-supply-increase",
+      "title": "原油供应增加。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["observed_fact", "supply", "bearish", "petroleum", "energy"],
+      "expected": {"commodity_keys": ["crude_oil"], "no_commodity_keys": [], "market_direction": "bearish", "reasoning_tags": ["supply_increase"], "signal_kind": "fundamental_fact"},
+      "enforcement": {"commodity": "g2", "direction": "g3a", "relative_value": "not_applicable"},
+      "notes": "Observed supply increase is bearish evidence."
+    },
+    {
+      "id": "fuel-oil-supply-loose",
+      "title": "燃料油供应宽松。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["observed_fact", "supply", "bearish", "petroleum", "energy"],
+      "expected": {"commodity_keys": ["fuel_oil"], "no_commodity_keys": [], "market_direction": "bearish", "reasoning_tags": ["supply_loose"], "signal_kind": "fundamental_fact"},
+      "enforcement": {"commodity": "g2", "direction": "g3a", "relative_value": "not_applicable"},
+      "notes": "Observed loose supply is bearish evidence."
+    },
+    {
+      "id": "live-hog-inventory-accumulation",
+      "title": "生猪库存累积。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["observed_fact", "inventory", "bearish", "live_hog", "agriculture"],
+      "expected": {"commodity_keys": ["live_hog"], "no_commodity_keys": [], "market_direction": "bearish", "reasoning_tags": ["inventory_accumulation"], "signal_kind": "fundamental_fact"},
+      "enforcement": {"commodity": "g2", "direction": "g3a", "relative_value": "not_applicable"},
+      "notes": "Observed inventory accumulation is bearish evidence."
+    },
+    {
+      "id": "aluminum-ingot-inventory-increase",
+      "title": "铝锭库存增加。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["observed_fact", "inventory", "bearish", "aluminum", "metals"],
+      "expected": {"commodity_keys": ["aluminum"], "no_commodity_keys": [], "market_direction": "bearish", "reasoning_tags": ["inventory_increase"], "signal_kind": "fundamental_fact"},
+      "enforcement": {"commodity": "g2", "direction": "g3a", "relative_value": "not_applicable"},
+      "notes": "Observed inventory increase is bearish evidence."
+    },
+    {
+      "id": "soybean-meal-demand-weakness",
+      "title": "豆粕需求疲弱。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["observed_fact", "demand", "bearish", "agriculture"],
+      "expected": {"commodity_keys": ["soybean_meal"], "no_commodity_keys": [], "market_direction": "bearish", "reasoning_tags": ["demand_weakness"], "signal_kind": "fundamental_fact"},
+      "enforcement": {"commodity": "g2", "direction": "g3a", "relative_value": "not_applicable"},
+      "notes": "Unqualified demand weakness is bearish evidence."
+    },
+    {
+      "id": "corn-cost-decline",
+      "title": "玉米成本下移。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["observed_fact", "cost", "bearish", "agriculture"],
+      "expected": {"commodity_keys": ["corn"], "no_commodity_keys": [], "market_direction": "bearish", "reasoning_tags": ["cost_decline"], "signal_kind": "fundamental_fact"},
+      "enforcement": {"commodity": "g2", "direction": "g3a", "relative_value": "not_applicable"},
+      "notes": "Unqualified cost decline is bearish fundamental evidence."
+    },
+    {
+      "id": "crude-oil-negated-supply-tightening",
+      "title": "原油供应并未收紧。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["negation", "supply", "petroleum", "energy", "neutral"],
+      "expected": {"commodity_keys": ["crude_oil"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["supply_tightening_negated"], "signal_kind": "negated_signal"},
+      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "notes": "Direct negation suppresses, rather than reverses, tightening."
+    },
+    {
+      "id": "fuel-oil-negated-inventory-decline",
+      "title": "燃料油库存没有明显下降。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["negation", "inventory", "petroleum", "energy", "neutral"],
+      "expected": {"commodity_keys": ["fuel_oil"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["inventory_decline_negated"], "signal_kind": "negated_signal"},
+      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "notes": "Negated inventory decline has no automatic opposite direction."
+    },
+    {
+      "id": "live-hog-negated-demand-improvement",
+      "title": "生猪需求尚未改善。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["negation", "demand", "live_hog", "agriculture", "neutral"],
+      "expected": {"commodity_keys": ["live_hog"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["demand_improvement_negated"], "signal_kind": "negated_signal"},
+      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "notes": "Unrealized demand improvement remains neutral."
+    },
+    {
+      "id": "aluminum-unfulfilled-cut-expectation",
+      "title": "电解铝减产预期未兑现。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["uncertainty", "supply", "aluminum", "metals", "neutral"],
+      "expected": {"commodity_keys": ["aluminum"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["production_cut_unfulfilled"], "signal_kind": "uncertain_signal"},
+      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "notes": "An unfulfilled expectation is not observed supply tightening."
+    },
+    {
+      "id": "primary-aluminum-negated-cost-support",
+      "title": "原铝价格并未获得成本支撑。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["negation", "cost", "aluminum", "metals", "neutral"],
+      "expected": {"commodity_keys": ["aluminum"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["cost_support_negated"], "signal_kind": "negated_signal"},
+      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "notes": "Negated support does not itself prove a bearish outcome."
+    },
+    {
+      "id": "corn-uncertain-inventory-decline",
+      "title": "玉米库存下降趋势不明确。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["uncertainty", "inventory", "agriculture", "neutral"],
+      "expected": {"commodity_keys": ["corn"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["inventory_decline_uncertain"], "signal_kind": "uncertain_signal"},
+      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "notes": "Uncertain inventory direction is not deterministic evidence."
+    },
+    {
+      "id": "crude-oil-clause-local-negation",
+      "title": "原油供应并未收紧，但需求明显改善。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["negation", "demand", "supply", "petroleum", "energy", "bullish"],
+      "expected": {"commodity_keys": ["crude_oil"], "no_commodity_keys": [], "market_direction": "bullish", "reasoning_tags": ["supply_tightening_negated", "demand_improvement"], "signal_kind": "negated_signal"},
+      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "notes": "Negation is local and does not erase separate demand evidence."
+    },
+    {
+      "id": "wheat-possible-demand-weakness",
+      "title": "不排除小麦需求继续走弱。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["uncertainty", "conditional", "demand", "agriculture", "neutral"],
+      "expected": {"commodity_keys": ["wheat"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["demand_weakness_possible"], "signal_kind": "uncertain_signal"},
+      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "notes": "Possibility language is not an observed bearish fact."
+    },
+    {
+      "id": "crude-oil-conditional-production-cut",
+      "title": "若减产兑现，原油价格或获支撑。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["conditional", "forecast", "supply", "petroleum", "energy", "neutral"],
+      "expected": {"commodity_keys": ["crude_oil"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["production_cut_conditional"], "signal_kind": "conditional_signal"},
+      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "notes": "Conditional production cuts do not equal observed support."
+    },
+    {
+      "id": "fuel-oil-conditional-import-decline",
+      "title": "如果进口下降，燃料油供应可能收紧。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["conditional", "forecast", "supply", "petroleum", "energy", "neutral"],
+      "expected": {"commodity_keys": ["fuel_oil"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["import_decline_conditional"], "signal_kind": "conditional_signal"},
+      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "notes": "Conditional import changes have no outright direction."
+    },
+    {
+      "id": "live-hog-conditional-demand-recovery",
+      "title": "一旦需求恢复，生猪库存有望去化。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["conditional", "forecast", "demand", "inventory", "live_hog", "agriculture", "neutral"],
+      "expected": {"commodity_keys": ["live_hog"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["demand_recovery_conditional"], "signal_kind": "conditional_signal"},
+      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "notes": "Conditional demand recovery is a scenario, not a fact."
+    },
+    {
+      "id": "aluminum-forecast-inventory-decline",
+      "title": "预计电解铝库存将下降。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["forecast", "inventory", "aluminum", "metals", "neutral"],
+      "expected": {"commodity_keys": ["aluminum"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["inventory_decline_forecast"], "signal_kind": "conditional_signal"},
+      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "notes": "Forecast inventory decline remains qualified."
+    },
+    {
+      "id": "crude-oil-supply-demand-conflict",
+      "title": "原油供应收紧，但需求疲弱。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["conflict", "supply", "demand", "petroleum", "energy", "neutral"],
+      "expected": {"commodity_keys": ["crude_oil"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["supply_tightening", "demand_weakness"], "signal_kind": "conflicting_signals"},
+      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "notes": "Opposing factual fundamentals remain neutral in one-direction output."
+    },
+    {
+      "id": "aluminum-inventory-stock-conflict",
+      "title": "电解铝库存去化，但高库存仍限制上涨空间。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["conflict", "inventory", "aluminum", "metals", "neutral"],
+      "expected": {"commodity_keys": ["aluminum"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["inventory_destock", "high_inventory_constraint"], "signal_kind": "conflicting_signals"},
+      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "notes": "Destocking and high stock are explicit competing evidence."
+    },
+    {
+      "id": "fuel-oil-horizon-conflict",
+      "title": "燃料油短期偏强，中长期承压。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["horizon", "petroleum", "energy", "neutral"],
+      "expected": {"commodity_keys": ["fuel_oil"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["short_term_strength", "medium_long_term_pressure"], "signal_kind": "horizon_conflict"},
+      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "notes": "Opposing horizons cannot collapse into one outright direction."
+    },
+    {
+      "id": "aluminum-capacity-horizon-conflict",
+      "title": "当前电解铝供应偏紧，后期产能将恢复。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["horizon", "supply", "aluminum", "metals", "neutral"],
+      "expected": {"commodity_keys": ["aluminum"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["current_supply_tightness", "future_capacity_recovery"], "signal_kind": "horizon_conflict"},
+      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "notes": "Current and future supply statements conflict by horizon."
+    },
+    {
+      "id": "aluminum-cast-alloy-arbitrage",
+      "title": "原铝与铸造铝合金套利机会显现。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["relative_value", "arbitrage", "aluminum", "metals", "neutral"],
+      "expected": {"commodity_keys": ["aluminum", "cast_aluminum_alloy"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["aluminum_alloy_arbitrage"], "signal_kind": "relative_value"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "g4"},
+      "notes": "Arbitrage is not an outright directional conclusion."
+    },
+    {
+      "id": "cross-commodity-spread-widening",
+      "title": "跨品种价差扩大。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["relative_value", "spread", "neutral"],
+      "expected": {"commodity_keys": [], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["cross_commodity_spread_widening"], "signal_kind": "relative_value"},
+      "enforcement": {"commodity": "not_applicable", "direction": "not_applicable", "relative_value": "g4"},
+      "notes": "An unnamed spread has no single-outcome direction."
+    },
+    {
+      "id": "calendar-spread-repair",
+      "title": "近远月价差存在修复空间。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["relative_value", "spread", "neutral"],
+      "expected": {"commodity_keys": [], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["calendar_spread_repair"], "signal_kind": "relative_value"},
+      "enforcement": {"commodity": "not_applicable", "direction": "not_applicable", "relative_value": "g4"},
+      "notes": "Calendar spread repair requires a separate signal model."
+    },
+    {
+      "id": "aluminum-alloy-paired-legs",
+      "title": "买原铝卖铸造铝合金。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["relative_value", "arbitrage", "aluminum", "metals", "neutral"],
+      "expected": {"commodity_keys": ["aluminum", "cast_aluminum_alloy"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["paired_legs"], "signal_kind": "relative_value"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "g4"},
+      "notes": "Paired legs cannot become one bullish or bearish direction."
+    },
+    {
+      "id": "carry-opportunity-strengthening",
+      "title": "正套机会增强。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["relative_value", "arbitrage", "neutral"],
+      "expected": {"commodity_keys": [], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["carry_opportunity"], "signal_kind": "relative_value"},
+      "enforcement": {"commodity": "not_applicable", "direction": "not_applicable", "relative_value": "g4"},
+      "notes": "Carry language is not an outright market direction."
+    },
+    {
+      "id": "crude-fuel-crack-spread-strength",
+      "title": "原油与燃料油裂解价差走强。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["relative_value", "spread", "petroleum", "energy", "neutral"],
+      "expected": {"commodity_keys": ["crude_oil", "fuel_oil"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["crack_spread_strength"], "signal_kind": "relative_value"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "g4"},
+      "notes": "Crack spread strength is relative-value evidence only."
+    },
+    {
+      "id": "soybean-oil-not-crude-oil",
+      "title": "豆油库存下降。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["false_positive_guard", "inventory", "agriculture", "neutral"],
+      "expected": {"commodity_keys": [], "no_commodity_keys": ["crude_oil"], "market_direction": "neutral", "reasoning_tags": ["agricultural_oil_guard"], "signal_kind": "false_positive_guard"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "not_applicable"},
+      "notes": "Soybean oil must not trigger crude oil."
+    },
+    {
+      "id": "palm-oil-not-crude-oil",
+      "title": "棕榈油供应增加。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["false_positive_guard", "supply", "agriculture", "neutral"],
+      "expected": {"commodity_keys": [], "no_commodity_keys": ["crude_oil"], "market_direction": "neutral", "reasoning_tags": ["agricultural_oil_guard"], "signal_kind": "false_positive_guard"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "not_applicable"},
+      "notes": "Palm oil must not trigger crude oil."
+    },
+    {
+      "id": "rapeseed-oil-not-crude-oil",
+      "title": "菜籽油价格上涨。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["false_positive_guard", "explicit_price_movement", "agriculture", "neutral"],
+      "expected": {"commodity_keys": [], "no_commodity_keys": ["crude_oil"], "market_direction": "neutral", "reasoning_tags": ["agricultural_oil_guard"], "signal_kind": "false_positive_guard"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "not_applicable"},
+      "notes": "Rapeseed oil must not trigger crude oil."
+    },
+    {
+      "id": "lard-not-crude-oil-or-live-hog",
+      "title": "猪油库存增加。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["false_positive_guard", "inventory", "agriculture", "neutral"],
+      "expected": {"commodity_keys": [], "no_commodity_keys": ["crude_oil", "live_hog"], "market_direction": "neutral", "reasoning_tags": ["lard_guard"], "signal_kind": "false_positive_guard"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "not_applicable"},
+      "notes": "Lard must not trigger crude oil or live hog."
+    },
+    {
+      "id": "ordinary-alloy-not-cast-alloy",
+      "title": "普通铝合金订单下降。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["false_positive_guard", "demand", "aluminum", "metals", "neutral"],
+      "expected": {"commodity_keys": [], "no_commodity_keys": ["cast_aluminum_alloy"], "market_direction": "neutral", "reasoning_tags": ["generic_alloy_guard"], "signal_kind": "false_positive_guard"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "not_applicable"},
+      "notes": "Generic alloy must not trigger the listed cast alloy."
+    },
+    {
+      "id": "alumina-not-primary-aluminum-guard",
+      "title": "氧化铝价格上涨。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["false_positive_guard", "explicit_price_movement", "aluminum", "metals", "neutral"],
+      "expected": {"commodity_keys": [], "no_commodity_keys": ["aluminum"], "market_direction": "neutral", "reasoning_tags": ["alumina_guard"], "signal_kind": "false_positive_guard"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "not_applicable"},
+      "notes": "Alumina must not trigger primary aluminum."
+    },
+    {
+      "id": "refinery-throughput-no-commodity",
+      "title": "炼厂开工率下降。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["false_positive_guard", "supply", "petroleum", "energy", "neutral"],
+      "expected": {"commodity_keys": [], "no_commodity_keys": ["crude_oil", "fuel_oil", "low_sulfur_fuel_oil"], "market_direction": "neutral", "reasoning_tags": ["refinery_context_guard"], "signal_kind": "false_positive_guard"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "not_applicable"},
+      "notes": "Refinery utilization alone identifies no specific commodity."
+    },
+    {
+      "id": "refined-products-demand-no-commodity",
+      "title": "成品油需求改善。",
+      "content": "",
+      "provenance": "synthetic_original",
+      "scenario_tags": ["false_positive_guard", "demand", "petroleum", "energy", "neutral"],
+      "expected": {"commodity_keys": [], "no_commodity_keys": ["crude_oil", "fuel_oil", "low_sulfur_fuel_oil"], "market_direction": "neutral", "reasoning_tags": ["broad_refined_products_guard"], "signal_kind": "false_positive_guard"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "not_applicable"},
+      "notes": "Broad refined products remain unmatched without a specific product."
+    }
+  ]
+}
