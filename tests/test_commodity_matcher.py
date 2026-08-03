@@ -146,6 +146,190 @@ class CommodityMatcherTests(unittest.TestCase):
                 )
                 self.assertEqual(actual_keys, expected_keys)
 
+    def test_matches_propylene_in_chinese_and_english_fields(self) -> None:
+        cases = (
+            ("丙烯专题报告", "General market context."),
+            ("Chemical report", "丙烯供应出现变化。"),
+            ("Chemical report", "丙烯期货成交活跃。"),
+            ("Chemical report", "Propylene market conditions changed."),
+        )
+
+        for title, content in cases:
+            with self.subTest(title=title, content=content):
+                self.assertEqual(
+                    tuple(
+                        match.commodity_key
+                        for match in self.matcher.match(make_information(title, content))
+                    ),
+                    ("propylene",),
+                )
+
+    def test_excludes_propylene_derivatives_but_preserves_local_occurrences(self) -> None:
+        excluded_cases = (
+            "聚丙烯库存下降",
+            "聚丙烯期货成交活跃",
+            "丙烯腈市场回顾",
+            "丙烯酸价格变化",
+            "丙烯酰胺装置检修",
+            "环氧丙烷供应增加",
+            "丙烯画材料介绍",
+            "丙烯颜料销售增长",
+            "polypropylene market conditions changed.",
+        )
+        retained_cases = (
+            "聚丙烯需求下降，但丙烯供应仍然偏紧。",
+            "丙烯腈生产利润下降，上游丙烯价格变化。",
+            "Polypropylene demand declined while propylene supply tightened.",
+        )
+
+        for text in excluded_cases:
+            with self.subTest(excluded=text):
+                self.assertNotIn(
+                    "propylene",
+                    tuple(
+                        match.commodity_key
+                        for match in self.matcher.match(make_information(text, "Details."))
+                    ),
+                )
+
+        for text in retained_cases:
+            with self.subTest(retained=text):
+                self.assertIn(
+                    "propylene",
+                    tuple(
+                        match.commodity_key
+                        for match in self.matcher.match(make_information(text, "Details."))
+                    ),
+                )
+
+        title_content_matches = self.matcher.match(
+            make_information("聚丙烯周报", "正文另行讨论丙烯现货市场。")
+        )
+        self.assertEqual(
+            tuple(match.commodity_key for match in title_content_matches),
+            ("propylene",),
+        )
+
+    def test_matches_ethylene_glycol_in_chinese_and_english_fields(self) -> None:
+        cases = (
+            ("乙二醇库存专题", "General market context."),
+            ("Chemical report", "乙二醇港口库存继续变化。"),
+            ("Chemical report", "乙二醇期货成交活跃。"),
+            ("Chemical report", "乙二醇期权市场启动。"),
+            ("Chemical report", "Ethylene glycol inventories declined."),
+            ("Chemical report", "Monoethylene glycol supply increased."),
+            ("Chemical report", "Mono ethylene glycol demand improved."),
+        )
+
+        for title, content in cases:
+            with self.subTest(title=title, content=content):
+                self.assertEqual(
+                    tuple(
+                        match.commodity_key
+                        for match in self.matcher.match(make_information(title, content))
+                    ),
+                    ("ethylene_glycol",),
+                )
+
+    def test_excludes_ethylene_glycol_derivatives_but_preserves_local_occurrences(self) -> None:
+        excluded_cases = (
+            "聚乙二醇需求增加",
+            "乙二醇单丁醚价格变化",
+            "乙二醇醚市场回顾",
+            "二甘醇供应增加",
+            "三甘醇价格变化",
+            "丙二醇装置检修",
+        )
+        retained_cases = (
+            "聚乙二醇需求下降，但乙二醇供应仍然偏紧。",
+            "乙二醇单丁醚价格变化，乙二醇期货成交活跃。",
+        )
+
+        for text in excluded_cases:
+            with self.subTest(excluded=text):
+                self.assertNotIn(
+                    "ethylene_glycol",
+                    tuple(
+                        match.commodity_key
+                        for match in self.matcher.match(make_information(text, "Details."))
+                    ),
+                )
+
+        for text in retained_cases:
+            with self.subTest(retained=text):
+                self.assertIn(
+                    "ethylene_glycol",
+                    tuple(
+                        match.commodity_key
+                        for match in self.matcher.match(make_information(text, "Details."))
+                    ),
+                )
+
+    def test_does_not_treat_unconfigured_acronyms_as_new_commodities(self) -> None:
+        for text in ("EG库存下降", "MEG供应增加", "PL期货成交活跃"):
+            with self.subTest(text=text):
+                self.assertNotIn(
+                    "ethylene_glycol",
+                    tuple(
+                        match.commodity_key
+                        for match in self.matcher.match(make_information(text, "Details."))
+                    ),
+                )
+                self.assertNotIn(
+                    "propylene",
+                    tuple(
+                        match.commodity_key
+                        for match in self.matcher.match(make_information(text, "Details."))
+                    ),
+                )
+
+    def test_preserves_registry_order_for_new_commodity_combinations(self) -> None:
+        cases = {
+            "乙二醇与原油成本同步变化。": ("crude_oil", "ethylene_glycol"),
+            "丙烯与原油价格关联增强。": ("crude_oil", "propylene"),
+            "丙烯与乙二醇库存均发生变化。": ("propylene", "ethylene_glycol"),
+        }
+
+        for text, expected_keys in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(
+                    tuple(
+                        match.commodity_key
+                        for match in self.matcher.match(make_information(text, "Details."))
+                    ),
+                    expected_keys,
+                )
+
+        matches = self.matcher.match(
+            make_information("乙二醇专题", "原油成本影响乙二醇利润。")
+        )
+        self.assertEqual(
+            tuple(match.commodity_key for match in matches),
+            ("crude_oil", "ethylene_glycol"),
+        )
+
+    def test_does_not_form_new_aliases_across_title_and_content_boundaries(self) -> None:
+        cases = (
+            ("丙", "烯市场", "propylene", "丙烯"),
+            ("乙二", "醇库存", "ethylene_glycol", "乙二醇"),
+            ("Ethylene", "glycol market", "ethylene_glycol", "ethylene glycol"),
+            (
+                "Monoethylene",
+                "glycol market",
+                "ethylene_glycol",
+                "monoethylene glycol",
+            ),
+        )
+
+        for title, content, absent_key, absent_alias in cases:
+            with self.subTest(title=title, content=content):
+                matches = self.matcher.match(make_information(title, content))
+                aliases = tuple(
+                    alias for match in matches for alias in match.matched_aliases
+                )
+                self.assertNotIn(absent_key, tuple(match.commodity_key for match in matches))
+                self.assertNotIn(absent_alias, aliases)
+
     def test_retains_public_immutable_ordered_match_contract(self) -> None:
         matches = self.matcher.match(
             make_information("Crude oil", "Fuel oil and oil prices were discussed.")

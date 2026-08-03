@@ -82,6 +82,18 @@ commodities:
     aliases:
       - 生猪
       - 生猪期货
+  propylene:
+    label: Propylene
+    aliases:
+      - propylene
+      - 丙烯
+  ethylene_glycol:
+    label: Ethylene Glycol
+    aliases:
+      - ethylene glycol
+      - monoethylene glycol
+      - mono ethylene glycol
+      - 乙二醇
 
 ambiguous_alias_exclusions:
   oil:
@@ -90,3 +102,16 @@ ambiguous_alias_exclusions:
     - vegetable oil
     - canola oil
     - sunflower oil
+  丙烯:
+    - 聚丙烯
+    - 聚丙烯期货
+    - 丙烯腈
+    - 丙烯酸
+    - 丙烯酰胺
+    - 环氧丙烷
+    - 丙烯画
+    - 丙烯颜料
+  乙二醇:
+    - 聚乙二醇
+    - 乙二醇单丁醚
+    - 乙二醇醚
