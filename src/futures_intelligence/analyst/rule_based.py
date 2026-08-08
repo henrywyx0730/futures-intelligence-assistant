@@ -8,6 +8,7 @@ from futures_intelligence.analyst.commodity_matcher import (
     CommodityMatcher,
     phrase_matches,
 )
+from futures_intelligence.analyst.commodity_relevance import CommodityRelevanceResolver
 from futures_intelligence.analyst.market_movement import (
     NUMERICAL_PRIORITY,
     SETTLEMENT_PRIORITY,
@@ -57,9 +58,20 @@ COMMODITY_RULES = (
 class RuleBasedAnalyst(BaseAnalyst):
     """Create basic market interpretations from commodity keywords."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        commodity_matcher: CommodityMatcher | None = None,
+        commodity_relevance_resolver: CommodityRelevanceResolver | None = None,
+    ) -> None:
         """Load the configured commodity aliases."""
-        self._commodity_matcher = CommodityMatcher()
+        self._commodity_matcher = (
+            commodity_matcher if commodity_matcher is not None else CommodityMatcher()
+        )
+        self._commodity_relevance_resolver = (
+            commodity_relevance_resolver
+            if commodity_relevance_resolver is not None
+            else CommodityRelevanceResolver(matcher=self._commodity_matcher)
+        )
         self._market_movement_detector = MarketMovementDetector()
 
     def analyze(self, information: list[MarketInformation]) -> list[MarketAnalysis]:
@@ -69,8 +81,25 @@ class RuleBasedAnalyst(BaseAnalyst):
     def _analysis_for(self, item: MarketInformation) -> MarketAnalysis:
         """Build one rich, deterministic analysis without changing its summary."""
         text = f"{item.title} {item.content}".lower()
-        commodity_matches = self._commodity_matcher.match(item)
-        commodities = _commodity_labels(commodity_matches)
+        if item.source_type == "research_report":
+            relevance = self._commodity_relevance_resolver.assess(item)
+            commodity_matches = relevance.lexical_matches
+            primary_keys = {entry.commodity_key for entry in relevance.primary}
+            primary_matches = tuple(
+                match for match in commodity_matches if match.commodity_key in primary_keys
+            )
+            mentioned_keys = {entry.commodity_key for entry in relevance.mentioned}
+            mentioned_matches = tuple(
+                match for match in commodity_matches if match.commodity_key in mentioned_keys
+            )
+            commodities = _commodity_labels(primary_matches)
+            mentioned_commodities = _commodity_labels(mentioned_matches)
+            summary = _research_report_summary(commodities)
+        else:
+            commodity_matches = self._commodity_matcher.match(item)
+            commodities = _commodity_labels(commodity_matches)
+            mentioned_commodities = ()
+            summary = _summary_for_commodities(commodities)
         market_direction, directional_details, directional_confidence = (
             _directional_signals(
                 item,
@@ -82,7 +111,18 @@ class RuleBasedAnalyst(BaseAnalyst):
         reasoning_details = [
             f"Source type: {item.source_type}; reliability score: {item.reliability_score}/5."
         ]
-        if commodities:
+        if item.source_type == "research_report":
+            if commodities:
+                reasoning_details.append(
+                    f"Primary commodity focus: {', '.join(commodities)}."
+                )
+            else:
+                reasoning_details.append("No primary tracked commodity focus was detected.")
+            if mentioned_commodities:
+                reasoning_details.append(
+                    f"Mentioned tracked commodities: {', '.join(mentioned_commodities)}."
+                )
+        elif commodities:
             reasoning_details.append(
                 f"Detected commodity keywords: {', '.join(commodities)}."
             )
@@ -97,29 +137,38 @@ class RuleBasedAnalyst(BaseAnalyst):
         )
         return MarketAnalysis(
             market_information=item,
-            summary=self._summary_for(item),
+            summary=summary,
             market_direction=market_direction,
             confidence_score=confidence_score,
             reasoning_details=tuple(reasoning_details),
         )
 
-    def _summary_for(self, item: MarketInformation) -> str:
-        """Build a concise interpretation from title and content keywords."""
-        commodities = _commodity_labels(self._commodity_matcher.match(item))
-        if commodities:
-            return (
-                f"Detected commodity focus: {', '.join(commodities)}. "
-                "Review potential supply, demand, inventory, and cost implications."
-            )
-        return (
-            "No tracked commodity keywords detected. "
-            "Review the information for broader market context."
-        )
-
-
 def _commodity_labels(matches: tuple[CommodityMatch, ...]) -> tuple[str, ...]:
     """Return configured display labels from immutable matcher results."""
     return tuple(match.commodity_label for match in matches)
+
+
+def _summary_for_commodities(commodities: tuple[str, ...]) -> str:
+    """Build the established flat-matcher summary for non-research sources."""
+    if commodities:
+        return (
+            f"Detected commodity focus: {', '.join(commodities)}. "
+            "Review potential supply, demand, inventory, and cost implications."
+        )
+    return (
+        "No tracked commodity keywords detected. "
+        "Review the information for broader market context."
+    )
+
+
+def _research_report_summary(primary_commodities: tuple[str, ...]) -> str:
+    """Describe only title-confirmed research-report commodity focus."""
+    if primary_commodities:
+        return _summary_for_commodities(primary_commodities)
+    return (
+        "No primary tracked commodity focus detected. "
+        "Review the information for broader market context."
+    )
 
 
 def _directional_signals(

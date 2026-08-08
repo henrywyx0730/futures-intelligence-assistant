@@ -11,6 +11,12 @@ from unittest.mock import Mock, patch
 
 from futures_intelligence.analyst import LLMAnalyst, LLMSmokeTestResult
 from futures_intelligence.analyst.commodity_matcher import CommodityMatch
+from futures_intelligence.analyst.commodity_relevance import (
+    CommodityRelevance,
+    CommodityRelevanceAssessment,
+    MENTIONED_REASON,
+    PRIMARY_REASON,
+)
 from futures_intelligence.main import (
     SMOKE_TEST_REPORT_PATH,
     _collect_one_htfc_pdf_market_information,
@@ -57,6 +63,41 @@ class FakeClient:
 
     def __init__(self, result: object) -> None:
         self.responses = FakeResponses(result)
+
+
+def relevance_assessment(
+    matches: tuple[CommodityMatch, ...], primary_keys: tuple[str, ...] = ()
+) -> CommodityRelevanceAssessment:
+    """Build valid diagnostic relevance output with primary keys in lexical order."""
+    primary = tuple(
+        CommodityRelevance(
+            match.commodity_key,
+            match.commodity_label,
+            "primary",
+            (match.matched_aliases[0],),
+            (),
+            1,
+            0,
+            (PRIMARY_REASON,),
+        )
+        for match in matches
+        if match.commodity_key in primary_keys
+    )
+    mentioned = tuple(
+        CommodityRelevance(
+            match.commodity_key,
+            match.commodity_label,
+            "mentioned",
+            (),
+            (match.matched_aliases[0],),
+            0,
+            1,
+            (MENTIONED_REASON,),
+        )
+        for match in matches
+        if match.commodity_key not in primary_keys
+    )
+    return CommodityRelevanceAssessment(matches, primary, mentioned)
 
 
 def routing_response() -> SimpleNamespace:
@@ -411,14 +452,27 @@ class MainTests(unittest.TestCase):
         ranker.rank.return_value = ranked
         router = Mock()
         router.analyze.return_value = analyses
-        matcher = Mock()
-        matcher.match.side_effect = [
-            (
-                CommodityMatch("gold", "Gold", ("gold",)),
-                CommodityMatch("copper", "Copper", ("copper",)),
+        resolver = Mock()
+        resolver.assess.side_effect = [
+            relevance_assessment(
+                (
+                    CommodityMatch("crude_oil", "Crude Oil", ("oil",)),
+                    CommodityMatch(
+                        "ethylene_glycol", "Ethylene Glycol", ("ethylene glycol",)
+                    ),
+                ),
+                ("ethylene_glycol",),
             ),
-            (),
-            (CommodityMatch("crude_oil", "Crude Oil", ("oil",)),),
+            relevance_assessment((CommodityMatch("live_hog", "Live Hog", ("live hog",)),)),
+            relevance_assessment(
+                (
+                    CommodityMatch("aluminum", "Aluminum", ("aluminum",)),
+                    CommodityMatch(
+                        "cast_aluminum_alloy", "Cast Aluminum Alloy", ("alloy",)
+                    ),
+                ),
+                ("aluminum", "cast_aluminum_alloy"),
+            ),
         ]
         output = StringIO()
 
@@ -430,7 +484,10 @@ class MainTests(unittest.TestCase):
             ) as create,
             patch("futures_intelligence.main.InformationRanker", return_value=ranker),
             patch("futures_intelligence.main.AnalystRouter", return_value=router),
-            patch("futures_intelligence.main.CommodityMatcher", return_value=matcher),
+            patch(
+                "futures_intelligence.main.CommodityRelevanceResolver",
+                return_value=resolver,
+            ),
             patch(
                 "futures_intelligence.main.LLMAnalyst",
                 side_effect=AssertionError("evaluation must not construct an LLM"),
@@ -466,7 +523,7 @@ class MainTests(unittest.TestCase):
         collector.collect.assert_called_once_with()
         ranker.rank.assert_called_once_with(items)
         router.analyze.assert_called_once_with(ranked)
-        self.assertEqual(matcher.match.call_args_list, [((item,),) for item in ranked])
+        self.assertEqual(resolver.assess.call_args_list, [((item,),) for item in ranked])
         self.assertEqual(first.commodities, ())
 
         rendered = output.getvalue()
@@ -476,12 +533,29 @@ class MainTests(unittest.TestCase):
         self.assertIn("Bullish Count: 1", rendered)
         self.assertIn("Bearish Count: 1", rendered)
         self.assertIn("Neutral Count: 1", rendered)
-        self.assertIn("Report Index: 1", rendered)
-        self.assertIn("Collection Index: 3", rendered)
-        self.assertIn("Detected Commodity Matches: Gold", rendered)
-        self.assertIn("Detected Commodity Matches: Gold, Copper", rendered)
-        self.assertIn("Detected Commodity Matches: none", rendered)
-        self.assertIn("Detected Commodity Matches: Crude Oil", rendered)
+        report_sections = rendered.split("Report Index: ")[1:]
+        self.assertEqual(len(report_sections), 3)
+        expected_diagnostics = (
+            (
+                "Detected Commodity Matches: Crude Oil, Ethylene Glycol",
+                "Primary Commodity Candidates: Ethylene Glycol",
+                "Mentioned Commodity Matches: Crude Oil",
+            ),
+            (
+                "Detected Commodity Matches: Live Hog",
+                "Primary Commodity Candidates: none",
+                "Mentioned Commodity Matches: Live Hog",
+            ),
+            (
+                "Detected Commodity Matches: Aluminum, Cast Aluminum Alloy",
+                "Primary Commodity Candidates: Aluminum, Cast Aluminum Alloy",
+                "Mentioned Commodity Matches: none",
+            ),
+        )
+        for section, expected_lines in zip(report_sections, expected_diagnostics):
+            for expected_line in expected_lines:
+                self.assertEqual(section.count(expected_line), 1)
+        self.assertIn("Collection Index: 3", report_sections[0])
         summary_line = next(
             line for line in rendered.splitlines() if line.startswith("Analysis Summary: ")
         )
@@ -521,8 +595,8 @@ class MainTests(unittest.TestCase):
                 router.analyze.return_value = [
                     MarketAnalysis(item, "Neutral.") for item in items
                 ]
-                matcher = Mock()
-                matcher.match.return_value = ()
+                resolver = Mock()
+                resolver.assess.return_value = relevance_assessment(())
                 output = StringIO()
 
                 with (
@@ -536,7 +610,10 @@ class MainTests(unittest.TestCase):
                     ),
                     patch("futures_intelligence.main.InformationRanker", return_value=ranker),
                     patch("futures_intelligence.main.AnalystRouter", return_value=router),
-                    patch("futures_intelligence.main.CommodityMatcher", return_value=matcher),
+                    patch(
+                        "futures_intelligence.main.CommodityRelevanceResolver",
+                        return_value=resolver,
+                    ),
                     redirect_stdout(output),
                 ):
                     exit_code = _run_htfc_pdf_analysis_evaluation()
@@ -549,6 +626,17 @@ class MainTests(unittest.TestCase):
                 else:
                     ranker.rank.assert_called_once_with(items)
                     router.analyze.assert_called_once_with(items)
+                    self.assertEqual(
+                        resolver.assess.call_args_list,
+                        [((item,),) for item in items],
+                    )
+                    self.assertIn("Detected Commodity Matches: none", output.getvalue())
+                    self.assertIn(
+                        "Primary Commodity Candidates: none", output.getvalue()
+                    )
+                    self.assertIn(
+                        "Mentioned Commodity Matches: none", output.getvalue()
+                    )
 
         source = _huatai_pdf_source()
         registry = {
@@ -624,13 +712,15 @@ class MainTests(unittest.TestCase):
                 if "ranker" in expected:
                     matcher_class.assert_not_called()
 
-    def test_huatai_pdf_analysis_evaluation_propagates_analysis_and_matcher_errors(
+    def test_huatai_pdf_analysis_evaluation_propagates_analysis_and_resolver_errors(
         self,
     ) -> None:
         for collaborator, exception in (
             ("ranker", OSError("EVALUATION_RANKER_SECRET")),
             ("ranker", TypeError("EVALUATION_RANKER_TYPE_SECRET")),
-            ("matcher", TypeError("EVALUATION_MATCHER_SECRET")),
+            ("resolver", TypeError("EVALUATION_RESOLVER_SECRET")),
+            ("resolver", AssertionError("EVALUATION_RESOLVER_ASSERTION_SECRET")),
+            ("resolver", OSError("EVALUATION_RESOLVER_OSERROR_SECRET")),
             ("router", OSError("EVALUATION_ROUTER_OSERROR_SECRET")),
             ("router", AssertionError("EVALUATION_ROUTER_SECRET")),
         ):
@@ -648,9 +738,9 @@ class MainTests(unittest.TestCase):
                 router = Mock()
                 router.analyze.side_effect = exception if collaborator == "router" else None
                 router.analyze.return_value = [MarketAnalysis(item, "Neutral.")]
-                matcher = Mock()
-                matcher.match.side_effect = exception if collaborator == "matcher" else None
-                matcher.match.return_value = ()
+                resolver = Mock()
+                resolver.assess.side_effect = exception if collaborator == "resolver" else None
+                resolver.assess.return_value = relevance_assessment(())
                 output = StringIO()
 
                 with (
@@ -664,7 +754,10 @@ class MainTests(unittest.TestCase):
                     ) as create,
                     patch("futures_intelligence.main.InformationRanker", return_value=ranker),
                     patch("futures_intelligence.main.AnalystRouter", return_value=router),
-                    patch("futures_intelligence.main.CommodityMatcher", return_value=matcher),
+                    patch(
+                        "futures_intelligence.main.CommodityRelevanceResolver",
+                        return_value=resolver,
+                    ),
                     redirect_stdout(output),
                 ):
                     with self.assertRaises(type(exception)) as raised:
@@ -816,19 +909,20 @@ class MainTests(unittest.TestCase):
                     detached_source["pdf_extraction"], source["pdf_extraction"]
                 )
 
-    def test_huatai_pdf_analysis_evaluation_rejects_malformed_matcher_results(
+    def test_huatai_pdf_analysis_evaluation_rejects_malformed_resolver_results(
         self,
     ) -> None:
-        valid_match = CommodityMatch("gold", "Gold", ("gold",))
-        foreign_match = SimpleNamespace(commodity_label="FOREIGN_MATCH_SECRET")
-        for matcher_result in (
+        foreign_assessment = SimpleNamespace(
+            lexical_matches=(), primary=(), mentioned=()
+        )
+        for resolver_result in (
             None,
-            [valid_match],
-            (match for match in (valid_match,)),
-            (foreign_match,),
+            [],
+            (value for value in ()),
+            foreign_assessment,
             (object(),),
         ):
-            with self.subTest(matcher_result_type=type(matcher_result).__name__):
+            with self.subTest(resolver_result_type=type(resolver_result).__name__):
                 source = _huatai_pdf_source()
                 registry = {
                     "sources": {"research_reports": {"futures_companies": [source]}}
@@ -840,8 +934,8 @@ class MainTests(unittest.TestCase):
                 ranker.rank.return_value = [item]
                 router = Mock()
                 router.analyze.return_value = [MarketAnalysis(item, "Neutral.")]
-                matcher = Mock()
-                matcher.match.return_value = matcher_result
+                resolver = Mock()
+                resolver.assess.return_value = resolver_result
                 output = StringIO()
 
                 with (
@@ -855,7 +949,10 @@ class MainTests(unittest.TestCase):
                     ) as create,
                     patch("futures_intelligence.main.InformationRanker", return_value=ranker),
                     patch("futures_intelligence.main.AnalystRouter", return_value=router),
-                    patch("futures_intelligence.main.CommodityMatcher", return_value=matcher),
+                    patch(
+                        "futures_intelligence.main.CommodityRelevanceResolver",
+                        return_value=resolver,
+                    ),
                     redirect_stdout(output),
                 ):
                     exit_code = _run_htfc_pdf_analysis_evaluation()
@@ -863,7 +960,7 @@ class MainTests(unittest.TestCase):
                 self.assertEqual(exit_code, 1)
                 rendered = output.getvalue()
                 self.assertNotIn("deterministic analysis evaluation succeeded", rendered)
-                self.assertNotIn("FOREIGN_MATCH_SECRET", rendered)
+                self.assertNotIn("foreign_assessment", rendered)
                 self.assertEqual(item.commodities, ())
                 self.assertFalse(source["enabled"])
                 self.assertEqual(source["pdf_extraction"]["max_selected_pdfs"], 3)

@@ -16,6 +16,11 @@ from futures_intelligence.analyst import (
     LLMAnalyst,
 )
 from futures_intelligence.analyst.commodity_matcher import CommodityMatch, CommodityMatcher
+from futures_intelligence.analyst.commodity_relevance import (
+    CommodityRelevance,
+    CommodityRelevanceAssessment,
+    CommodityRelevanceResolver,
+)
 from futures_intelligence.analyst.llm import _openai_client_for_smoke_test
 from futures_intelligence.collectors.research_report import ResearchReportCollector
 from futures_intelligence.collectors.factory import CollectorFactory
@@ -331,9 +336,12 @@ def _run_htfc_pdf_analysis_evaluation() -> int:
         return 1
 
     try:
-        ranked_information, analyses, commodity_matches = _evaluate_htfc_pdf_information(
-            collected_information
-        )
+        (
+            ranked_information,
+            analyses,
+            commodity_matches,
+            commodity_relevance,
+        ) = _evaluate_htfc_pdf_information(collected_information)
     except _HuataiSmokeTestFailure as error:
         print(f"Huatai Futures PDF analysis evaluation failed: {error}")
         return 1
@@ -343,6 +351,7 @@ def _run_htfc_pdf_analysis_evaluation() -> int:
         ranked_information,
         analyses,
         commodity_matches,
+        commodity_relevance,
     )
     return 0
 
@@ -395,6 +404,7 @@ def _evaluate_htfc_pdf_information(
     list[MarketInformation],
     list[MarketAnalysis],
     tuple[tuple[CommodityMatch, ...], ...],
+    tuple[CommodityRelevanceAssessment, ...],
 ]:
     """Rank, analyze, and label a non-empty bounded batch without side effects."""
     if not collected_information:
@@ -415,12 +425,15 @@ def _evaluate_htfc_pdf_information(
     _validate_htfc_analyses(ranked_information, analyses)
     _validate_htfc_direction_counts(analyses)
 
-    matcher = CommodityMatcher()
-    commodity_matches = tuple(
-        _validated_htfc_commodity_matches(matcher.match(item))
+    resolver = CommodityRelevanceResolver()
+    commodity_relevance = tuple(
+        _validated_htfc_commodity_relevance(resolver.assess(item))
         for item in ranked_information
     )
-    return ranked_information, analyses, commodity_matches
+    commodity_matches = tuple(
+        assessment.lexical_matches for assessment in commodity_relevance
+    )
+    return ranked_information, analyses, commodity_matches, commodity_relevance
 
 
 def _validate_ranked_htfc_information(
@@ -515,6 +528,30 @@ def _validated_htfc_commodity_matches(
     return matches
 
 
+def _validated_htfc_commodity_relevance(
+    assessment: object,
+) -> CommodityRelevanceAssessment:
+    """Require public immutable relevance values for bounded diagnostics."""
+    if type(assessment) is not CommodityRelevanceAssessment:
+        raise _HuataiSmokeTestFailure(
+            "relevance resolver did not return a CommodityRelevanceAssessment."
+        )
+    if (
+        type(assessment.lexical_matches) is not tuple
+        or type(assessment.primary) is not tuple
+        or type(assessment.mentioned) is not tuple
+        or not all(isinstance(match, CommodityMatch) for match in assessment.lexical_matches)
+        or not all(
+            isinstance(relevance, CommodityRelevance)
+            for relevance in assessment.primary + assessment.mentioned
+        )
+    ):
+        raise _HuataiSmokeTestFailure(
+            "relevance resolver returned invalid CommodityRelevanceAssessment values."
+        )
+    return assessment
+
+
 def _analyze_one_htfc_pdf_market_information(item: MarketInformation) -> MarketAnalysis:
     """Rank and deterministically analyze one unchanged normalized item."""
     ranked_information = InformationRanker().rank([item])
@@ -593,6 +630,7 @@ def _print_htfc_pdf_analysis_evaluation(
     ranked_information: list[MarketInformation],
     analyses: list[MarketAnalysis],
     commodity_matches: tuple[tuple[CommodityMatch, ...], ...],
+    commodity_relevance: tuple[CommodityRelevanceAssessment, ...],
 ) -> None:
     """Print a bounded diagnostic summary without exposing report content."""
     print("Huatai Futures PDF deterministic analysis evaluation succeeded.")
@@ -608,8 +646,8 @@ def _print_htfc_pdf_analysis_evaluation(
     collection_indexes = {
         id(item): index for index, item in enumerate(collected_information, start=1)
     }
-    for ranked_index, (item, analysis, matches) in enumerate(
-        zip(ranked_information, analyses, commodity_matches),
+    for ranked_index, (item, analysis, matches, relevance) in enumerate(
+        zip(ranked_information, analyses, commodity_matches, commodity_relevance),
         start=1,
     ):
         print()
@@ -623,6 +661,14 @@ def _print_htfc_pdf_analysis_evaluation(
         print(
             "Detected Commodity Matches: "
             f"{_smoke_text_tuple(_commodity_match_labels(matches))}"
+        )
+        print(
+            "Primary Commodity Candidates: "
+            f"{_smoke_text_tuple(_commodity_relevance_labels(relevance.primary))}"
+        )
+        print(
+            "Mentioned Commodity Matches: "
+            f"{_smoke_text_tuple(_commodity_relevance_labels(relevance.mentioned))}"
         )
         print(f"Analysis Summary: {_truncate_smoke_text(analysis.summary, 500)}")
         print(f"Market Direction: {analysis.market_direction}")
@@ -639,6 +685,13 @@ def _print_htfc_pdf_analysis_evaluation(
 def _commodity_match_labels(matches: tuple[CommodityMatch, ...]) -> tuple[str, ...]:
     """Return only public matcher labels for bounded diagnostic output."""
     return tuple(match.commodity_label for match in matches)
+
+
+def _commodity_relevance_labels(
+    relevance: tuple[CommodityRelevance, ...],
+) -> tuple[str, ...]:
+    """Return bounded display labels from validated relevance values."""
+    return tuple(item.commodity_label for item in relevance)
 
 
 def _truncate_smoke_text(value: str, maximum_characters: int) -> str:

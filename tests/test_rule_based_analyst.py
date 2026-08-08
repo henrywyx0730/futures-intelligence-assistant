@@ -2,10 +2,16 @@
 
 from datetime import datetime, timezone
 import unittest
+from unittest.mock import Mock
 
 from futures_intelligence.analyst.commodity_matcher import (
     CommodityDefinition,
+    CommodityMatch,
     CommodityMatcher,
+)
+from futures_intelligence.analyst.commodity_relevance import (
+    CommodityRelevance,
+    CommodityRelevanceAssessment,
 )
 from futures_intelligence.analyst.rule_based import RuleBasedAnalyst
 from futures_intelligence.models import MarketInformation
@@ -14,13 +20,14 @@ from futures_intelligence.models import MarketInformation
 def make_information(
     title: str,
     content: str,
+    source_type: str = "test",
     **fields: object,
 ) -> MarketInformation:
     """Create a normalized item for rule-based analysis tests."""
     return MarketInformation(
         title=title,
         source="Test Source",
-        source_type="test",
+        source_type=source_type,
         published_time=datetime(2026, 7, 16, tzinfo=timezone.utc),
         content=content,
         **fields,
@@ -346,6 +353,214 @@ class RuleBasedAnalystTests(unittest.TestCase):
 
     def test_returns_empty_list_for_empty_input(self) -> None:
         self.assertEqual(self.analyst.analyze([]), [])
+
+    def test_research_report_uses_primary_focus_and_contextual_mentions(self) -> None:
+        analysis = self.analyst.analyze(
+            [
+                make_information(
+                    "乙二醇专题",
+                    "原油成本变化影响油制乙二醇利润。",
+                    source_type="research_report",
+                )
+            ]
+        )[0]
+
+        self.assertEqual(
+            analysis.summary,
+            "Detected commodity focus: Ethylene Glycol. "
+            "Review potential supply, demand, inventory, and cost implications.",
+        )
+        self.assertIn(
+            "Primary commodity focus: Ethylene Glycol.", analysis.reasoning_details
+        )
+        self.assertIn(
+            "Mentioned tracked commodities: Crude Oil.", analysis.reasoning_details
+        )
+        self.assertNotIn("Crude Oil", analysis.summary)
+        self.assertEqual(analysis.market_direction, "neutral")
+        self.assertEqual(analysis.confidence_score, 60)
+
+    def test_research_report_multiple_primary_commodities_keep_binary_focus_confidence(
+        self,
+    ) -> None:
+        analysis = self.analyst.analyze(
+            [
+                make_information(
+                    "原铝与铸造铝合金价差专题",
+                    "价差变化受到两端供需影响。",
+                    source_type="research_report",
+                )
+            ]
+        )[0]
+        one_primary_control = self.analyst.analyze(
+            [
+                make_information(
+                    "Gold outlook",
+                    "Macro context.",
+                    source_type="research_report",
+                )
+            ]
+        )[0]
+
+        self.assertEqual(
+            analysis.summary,
+            "Detected commodity focus: Aluminum, Cast Aluminum Alloy. "
+            "Review potential supply, demand, inventory, and cost implications.",
+        )
+        self.assertEqual(
+            analysis.reasoning_details.count(
+                "Primary commodity focus: Aluminum, Cast Aluminum Alloy."
+            ),
+            1,
+        )
+        self.assertNotIn("Mentioned tracked commodities:", analysis.reasoning_details)
+        self.assertEqual(analysis.market_direction, "neutral")
+        self.assertEqual(analysis.confidence_score, 60)
+        self.assertEqual(analysis.confidence_score, one_primary_control.confidence_score)
+
+    def test_research_report_mentioned_only_has_no_focus_or_fundamental_rule(self) -> None:
+        mentioned_only = make_information(
+            "Macro Policy Outlook",
+            "OPEC production cuts affect crude oil inflation assumptions.",
+            source_type="research_report",
+        )
+        no_match = make_information(
+            "Macro Policy Outlook",
+            "Inflation assumptions were reviewed.",
+            source_type="research_report",
+        )
+
+        mentioned_analysis, no_match_analysis = self.analyst.analyze(
+            [mentioned_only, no_match]
+        )
+
+        expected_summary = (
+            "No primary tracked commodity focus detected. "
+            "Review the information for broader market context."
+        )
+        self.assertEqual(mentioned_analysis.summary, expected_summary)
+        self.assertEqual(no_match_analysis.summary, expected_summary)
+        self.assertIn(
+            "Mentioned tracked commodities: Crude Oil.",
+            mentioned_analysis.reasoning_details,
+        )
+        self.assertIn(
+            "No primary tracked commodity focus was detected.",
+            mentioned_analysis.reasoning_details,
+        )
+        self.assertNotIn(
+            "Crude oil bullish signals: opec production cuts.",
+            mentioned_analysis.reasoning_details,
+        )
+        self.assertEqual(mentioned_analysis.market_direction, "neutral")
+        self.assertEqual(
+            mentioned_analysis.confidence_score, no_match_analysis.confidence_score
+        )
+
+    def test_research_report_primary_commodity_retains_existing_fundamental_rule(self) -> None:
+        analysis = self.analyst.analyze(
+            [
+                make_information(
+                    "Crude Oil Outlook",
+                    "OPEC production cuts were announced.",
+                    source_type="research_report",
+                )
+            ]
+        )[0]
+
+        self.assertEqual(analysis.market_direction, "bullish")
+        self.assertIn(
+            "Crude oil bullish signals: opec production cuts.", analysis.reasoning_details
+        )
+
+    def test_research_report_relevance_keeps_metadata_and_movement_priorities(self) -> None:
+        metadata_analysis = self.analyst.analyze(
+            [
+                make_information(
+                    "Macro Policy Outlook",
+                    "OPEC production cuts affect inflation assumptions.",
+                    source_type="research_report",
+                    metadata={"price_change": -2.0},
+                )
+            ]
+        )[0]
+        movement_analysis = self.analyst.analyze(
+            [
+                make_information(
+                    "Macro Market Update",
+                    "Oil prices jumped 2%.",
+                    source_type="research_report",
+                )
+            ]
+        )[0]
+
+        self.assertEqual(metadata_analysis.market_direction, "bearish")
+        self.assertIn(
+            "Structured price change is negative (-2.0).",
+            metadata_analysis.reasoning_details,
+        )
+        self.assertEqual(movement_analysis.market_direction, "bullish")
+        self.assertEqual(movement_analysis.confidence_score, 70)
+        self.assertIn(
+            "No primary tracked commodity focus was detected.",
+            movement_analysis.reasoning_details,
+        )
+        self.assertIn(
+            "Mentioned tracked commodities: Crude Oil.",
+            movement_analysis.reasoning_details,
+        )
+        self.assertNotIn(
+            "Primary commodity focus: Crude Oil.",
+            movement_analysis.reasoning_details,
+        )
+        self.assertIn(
+            "Observed market movement: Oil prices jumped 2%.",
+            movement_analysis.reasoning_details,
+        )
+
+    def test_non_research_content_commodity_retains_flat_rule_behavior(self) -> None:
+        analysis = self.analyst.analyze(
+            [
+                make_information(
+                    "Macro Policy Outlook",
+                    "OPEC production cuts affect crude oil assumptions.",
+                    source_type="rss",
+                )
+            ]
+        )[0]
+
+        self.assertIn("Detected commodity focus: Crude Oil.", analysis.summary)
+        self.assertEqual(analysis.market_direction, "bullish")
+
+    def test_matching_collaborators_use_resolver_only_for_research_reports(self) -> None:
+        primary_match = CommodityMatch("gold", "Gold", ("gold",))
+        primary = CommodityRelevance(
+            "gold",
+            "Gold",
+            "primary",
+            ("gold",),
+            (),
+            1,
+            0,
+            ("Matched a tracked commodity alias in the report title.",),
+        )
+        resolver = Mock()
+        resolver.assess.return_value = CommodityRelevanceAssessment(
+            (primary_match,), (primary,), ()
+        )
+        matcher = Mock()
+        matcher.match.return_value = (primary_match,)
+        analyst = RuleBasedAnalyst(
+            commodity_matcher=matcher,
+            commodity_relevance_resolver=resolver,
+        )
+        research = make_information("Gold report", "Context.", source_type="research_report")
+        rss = make_information("Gold report", "Context.", source_type="rss")
+
+        analyst.analyze([research, rss])
+
+        resolver.assess.assert_called_once_with(research)
+        matcher.match.assert_called_once_with(rss)
 
 
 if __name__ == "__main__":
