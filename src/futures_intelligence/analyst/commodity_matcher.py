@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
+from typing import Literal
 
 from futures_intelligence.models import MarketInformation
 
@@ -30,6 +31,26 @@ class CommodityMatch:
     commodity_key: str
     commodity_label: str
     matched_aliases: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class CommodityOccurrence:
+    """One selected lexical occurrence with field-local source provenance."""
+
+    commodity_key: str
+    commodity_label: str
+    alias: str
+    field: Literal["title", "content"]
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
+class CommodityMatchEvidence:
+    """Immutable flat matches and their selected lexical occurrences."""
+
+    matches: tuple[CommodityMatch, ...]
+    occurrences: tuple[CommodityOccurrence, ...]
 
 
 @dataclass(frozen=True)
@@ -75,10 +96,45 @@ class CommodityMatcher:
 
     def match(self, information: MarketInformation) -> tuple[CommodityMatch, ...]:
         """Return title/content-supported commodity matches in configured order."""
+        return self.match_with_evidence(information).matches
+
+    def match_with_evidence(
+        self,
+        information: MarketInformation,
+    ) -> CommodityMatchEvidence:
+        """Return flat matches plus selected field-local lexical provenance."""
         selected_candidates = self._resolve_overlaps(
             self._collect_candidates(information.title, field_index=0)
             + self._collect_candidates(information.content, field_index=1)
         )
+        matches = self._build_matches(selected_candidates)
+        occurrences = tuple(
+            CommodityOccurrence(
+                commodity_key=self._definitions[candidate.commodity_index].commodity_key,
+                commodity_label=self._definitions[candidate.commodity_index].commodity_label,
+                alias=candidate.alias,
+                field="title" if candidate.field_index == 0 else "content",
+                start=candidate.start,
+                end=candidate.end,
+            )
+            for candidate in sorted(
+                selected_candidates,
+                key=lambda item: (
+                    item.commodity_index,
+                    item.field_index,
+                    item.start,
+                    -item.span_length,
+                    item.alias_index,
+                ),
+            )
+        )
+        return CommodityMatchEvidence(matches, occurrences)
+
+    def _build_matches(
+        self,
+        selected_candidates: tuple[_AliasCandidate, ...],
+    ) -> tuple[CommodityMatch, ...]:
+        """Build established flat public matches from selected candidates once."""
         selected_aliases: dict[int, set[int]] = {}
         for candidate in selected_candidates:
             selected_aliases.setdefault(candidate.commodity_index, set()).add(

@@ -1,6 +1,7 @@
 """Tests for deterministic article-level commodity matching."""
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -8,7 +9,9 @@ from futures_intelligence.analyst import commodity_matcher
 from futures_intelligence.analyst.commodity_matcher import (
     CommodityDefinition,
     CommodityMatch,
+    CommodityMatchEvidence,
     CommodityMatcher,
+    CommodityOccurrence,
 )
 from futures_intelligence.models import MarketInformation
 
@@ -145,6 +148,141 @@ class CommodityMatcherTests(unittest.TestCase):
                     for match in self.matcher.match(make_information(text, "Details."))
                 )
                 self.assertEqual(actual_keys, expected_keys)
+
+    def test_match_with_evidence_preserves_flat_public_contract(self) -> None:
+        information = make_information("乙二醇专题", "原油成本变化。")
+
+        evidence = self.matcher.match_with_evidence(information)
+
+        self.assertIsInstance(evidence, CommodityMatchEvidence)
+        self.assertIsInstance(evidence.matches, tuple)
+        self.assertIsInstance(evidence.occurrences, tuple)
+        self.assertTrue(all(isinstance(match, CommodityMatch) for match in evidence.matches))
+        self.assertTrue(
+            all(isinstance(occurrence, CommodityOccurrence) for occurrence in evidence.occurrences)
+        )
+        self.assertEqual(self.matcher.match(information), evidence.matches)
+        self.assertEqual(
+            tuple((occurrence.commodity_key, occurrence.field) for occurrence in evidence.occurrences),
+            (("crude_oil", "content"), ("ethylene_glycol", "title")),
+        )
+
+    def test_match_and_evidence_matches_agree_for_representative_inputs(self) -> None:
+        cases = (
+            ("english crude oil", make_information("Crude oil outlook", "Details.")),
+            ("english fuel oil", make_information("Fuel oil outlook", "Details.")),
+            (
+                "english low sulfur fuel oil",
+                make_information("Low-sulfur fuel oil outlook", "Details."),
+            ),
+            ("chinese live hog", make_information("生猪专题", "Details.")),
+            ("chinese ethylene glycol", make_information("乙二醇专题", "Details.")),
+            ("chinese propylene", make_information("丙烯专题", "Details.")),
+            (
+                "specific overlap",
+                make_information("低硫燃料油库存下降", "Details."),
+            ),
+            (
+                "local exclusion with valid occurrence",
+                make_information("聚乙二醇观察", "乙二醇库存下降。"),
+            ),
+            ("title only", make_information("Gold outlook", "Details.")),
+            ("content only", make_information("Macro outlook", "Gold outlook.")),
+            ("empty input", SimpleNamespace(title="", content="")),
+            (
+                "multiple commodities",
+                make_information("Gold and crude oil", "Copper inventory update."),
+            ),
+        )
+
+        for label, information in cases:
+            with self.subTest(label=label):
+                self.assertEqual(
+                    self.matcher.match(information),  # type: ignore[arg-type]
+                    self.matcher.match_with_evidence(information).matches,  # type: ignore[arg-type]
+                )
+
+    def test_evidence_preserves_authored_english_source_spans(self) -> None:
+        information = make_information(
+            "Ethylene Glycol Outlook",
+            "CRUDE OIL costs changed.",
+        )
+
+        evidence = self.matcher.match_with_evidence(information)
+        occurrences = {occurrence.commodity_key: occurrence for occurrence in evidence.occurrences}
+
+        glycol = occurrences["ethylene_glycol"]
+        crude = occurrences["crude_oil"]
+        self.assertEqual(glycol.alias, "ethylene glycol")
+        self.assertEqual(crude.alias, "crude oil")
+        self.assertEqual(glycol.field, "title")
+        self.assertEqual(crude.field, "content")
+        self.assertEqual(information.title[glycol.start : glycol.end], "Ethylene Glycol")
+        self.assertEqual(information.content[crude.start : crude.end], "CRUDE OIL")
+
+    def test_evidence_exposes_only_selected_local_source_occurrences(self) -> None:
+        information = make_information(
+            "聚乙二醇产业观察",
+            "聚乙二醇需求稳定，乙二醇库存下降。低硫燃料油库存下降。",
+        )
+
+        evidence = self.matcher.match_with_evidence(information)
+
+        self.assertEqual(
+            tuple(match.commodity_key for match in evidence.matches),
+            ("low_sulfur_fuel_oil", "ethylene_glycol"),
+        )
+        self.assertEqual(
+            tuple(
+                (occurrence.commodity_key, occurrence.alias, occurrence.field)
+                for occurrence in evidence.occurrences
+            ),
+            (
+                ("low_sulfur_fuel_oil", "低硫燃料油", "content"),
+                ("ethylene_glycol", "乙二醇", "content"),
+            ),
+        )
+        self.assertNotIn("fuel_oil", tuple(item.commodity_key for item in evidence.occurrences))
+        self.assertNotIn("crude_oil", tuple(item.commodity_key for item in evidence.occurrences))
+        for occurrence in evidence.occurrences:
+            text = information.title if occurrence.field == "title" else information.content
+            self.assertEqual(text[occurrence.start : occurrence.end].casefold(), occurrence.alias)
+
+    def test_evidence_retains_repeated_and_field_local_occurrences(self) -> None:
+        information = make_information("乙二醇专题", "乙二醇库存下降，乙二醇进口减少。")
+
+        evidence = self.matcher.match_with_evidence(information)
+
+        glycol_occurrences = tuple(
+            occurrence
+            for occurrence in evidence.occurrences
+            if occurrence.commodity_key == "ethylene_glycol"
+        )
+        self.assertEqual(len(evidence.matches), 1)
+        self.assertEqual(len(glycol_occurrences), 3)
+        self.assertEqual(tuple(item.field for item in glycol_occurrences), ("title", "content", "content"))
+        self.assertEqual(evidence.matches[0].matched_aliases, ("乙二醇",))
+
+        field_local = self.matcher.match_with_evidence(
+            make_information("聚乙二醇产业观察", "乙二醇供需分析。")
+        )
+        self.assertEqual(
+            tuple((item.commodity_key, item.field) for item in field_local.occurrences),
+            (("ethylene_glycol", "content"),),
+        )
+
+    def test_evidence_is_immutable_and_empty_input_is_supported(self) -> None:
+        evidence = self.matcher.match_with_evidence(
+            make_information("Macro update", "No tracked commodities.")
+        )
+
+        self.assertEqual(evidence.matches, ())
+        self.assertEqual(evidence.occurrences, ())
+        populated = self.matcher.match_with_evidence(make_information("乙二醇专题", "Details."))
+        with self.assertRaises(AttributeError):
+            populated.occurrences += ()
+        with self.assertRaises(AttributeError):
+            populated.occurrences[0].field = "content"  # type: ignore[misc]
 
     def test_matches_propylene_in_chinese_and_english_fields(self) -> None:
         cases = (
