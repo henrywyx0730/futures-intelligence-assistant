@@ -91,6 +91,128 @@ class CommodityMatcherTests(unittest.TestCase):
                 )
                 self.assertEqual(actual_keys, expected_keys)
 
+    def test_matches_silver_chinese_identity_and_excludes_color_context(self) -> None:
+        positive_cases = (
+            ("白银期货动态跨期套利策略研究", "Details."),
+            ("量化策略报告", "白银库存变化受到关注。"),
+            ("白银期货", "Details."),
+        )
+        for title, content in positive_cases:
+            with self.subTest(title=title, content=content):
+                self.assertEqual(
+                    tuple(
+                        match.commodity_key
+                        for match in self.matcher.match(make_information(title, content))
+                    ),
+                    ("silver",),
+                )
+
+        for title in ("白银色涂层", "银色涂层", "银饰消费", "黄金与白银色材料"):
+            with self.subTest(title=title):
+                self.assertNotIn(
+                    "silver",
+                    tuple(
+                        match.commodity_key
+                        for match in self.matcher.match(make_information(title, "Details."))
+                    ),
+                )
+
+    def test_preserves_registry_order_for_silver_and_crude_oil(self) -> None:
+        matches = self.matcher.match(
+            make_information("白银与原油价格均出现变化。", "Details.")
+        )
+
+        self.assertEqual(
+            tuple(match.commodity_key for match in matches),
+            ("crude_oil", "silver"),
+        )
+
+    def test_matches_copper_title_topic_aliases_only_in_strong_title_context(self) -> None:
+        positive_titles = (
+            "铜专题",
+            "铜专题报告",
+            "铜期货",
+            "铜周报",
+            "铜月报",
+            "铜策略",
+            "铜调研",
+            "华泰期货铜专题报告",
+            "某期货铜周报",
+            "宏观观察：铜专题",
+        )
+        for title in positive_titles:
+            with self.subTest(title=title):
+                evidence = self.matcher.match_with_evidence(make_information(title, "Details."))
+                copper_occurrences = tuple(
+                    occurrence
+                    for occurrence in evidence.occurrences
+                    if occurrence.commodity_key == "copper"
+                )
+                self.assertEqual(
+                    tuple(match.commodity_key for match in evidence.matches), ("copper",)
+                )
+                self.assertEqual(len(copper_occurrences), 1)
+                occurrence = copper_occurrences[0]
+                self.assertEqual((occurrence.field, occurrence.alias), ("title", "铜"))
+                self.assertEqual(title[occurrence.start : occurrence.end], "铜")
+
+    def test_rejects_copper_title_topic_alias_without_the_strong_title_grammar(self) -> None:
+        titles = (
+            "青铜专题展览",
+            "黄铜专题研究",
+            "铜管行业研究",
+            "铜箔产业报告",
+            "铜矿企业观察",
+            "铜价上涨",
+            "美国铜产能缺口",
+            "含铜材料研究",
+            "青铜器文化研究",
+        )
+        for title in titles:
+            with self.subTest(title=title):
+                evidence = self.matcher.match_with_evidence(make_information(title, "Details."))
+                self.assertFalse(
+                    any(
+                        occurrence.commodity_key == "copper" and occurrence.field == "title"
+                        for occurrence in evidence.occurrences
+                    )
+                )
+
+    def test_keeps_copper_title_topic_alias_out_of_content_and_preserves_normal_aliases(self) -> None:
+        bare_content = self.matcher.match_with_evidence(
+            make_information("宏观政策跟踪", "正文讨论铜库存和进口情况。")
+        )
+        self.assertNotIn(
+            "copper", tuple(match.commodity_key for match in bare_content.matches)
+        )
+
+        ordinary_content = self.matcher.match_with_evidence(
+            make_information("宏观政策跟踪", "电解铜库存下降。")
+        )
+        copper_occurrence = next(
+            occurrence
+            for occurrence in ordinary_content.occurrences
+            if occurrence.commodity_key == "copper"
+        )
+        self.assertEqual((copper_occurrence.field, copper_occurrence.alias), ("content", "电解铜"))
+
+    def test_copper_combines_title_topic_and_ordinary_aliases_in_stable_order(self) -> None:
+        matches = self.matcher.match(
+            make_information("某期货铜专题报告", "电解铜库存和 refined copper 需求变化。")
+        )
+
+        self.assertEqual(matches[0].commodity_key, "copper")
+        self.assertEqual(matches[0].matched_aliases, ("refined copper", "电解铜", "铜"))
+
+    def test_does_not_map_lithium_ore_to_lithium_carbonate(self) -> None:
+        self.assertNotIn(
+            "lithium_carbonate",
+            tuple(
+                match.commodity_key
+                for match in self.matcher.match(make_information("锂矿盘点专题", "Details."))
+            ),
+        )
+
     def test_rejects_chinese_false_positive_contexts(self) -> None:
         cases = {
             "猪肉消费增加": (),
@@ -631,7 +753,12 @@ class CommodityMatcherTests(unittest.TestCase):
         self.assertEqual(self.matcher.match(make_information("Update", "Details.")), ())
 
     def test_rejects_unsafe_single_character_cjk_aliases(self) -> None:
-        for key, alias in (("live_hog", "猪"), ("crude_oil", "油"), ("aluminum", "铝")):
+        for key, alias in (
+            ("live_hog", "猪"),
+            ("crude_oil", "油"),
+            ("aluminum", "铝"),
+            ("copper", "铜"),
+        ):
             with self.subTest(key=key):
                 with self.assertRaisesRegex(ValueError, key):
                     self._load_matcher_from_registry(
@@ -724,6 +851,65 @@ class CommodityMatcherTests(unittest.TestCase):
             self._load_matcher_from_registry(
                 self._registry_with_alias("crude_oil", "Crude Oil", '"油"')
             )
+
+    def test_validates_title_topic_aliases_separately_from_ordinary_aliases(self) -> None:
+        valid_registry = """commodities:
+  copper:
+    label: Copper
+    aliases:
+      - copper
+    title_topic_aliases:
+      - 铜
+"""
+        matcher = self._load_matcher_from_registry(valid_registry)
+        self.assertEqual(
+            tuple(
+                match.commodity_key
+                for match in matcher.match(make_information("铜专题", "正文讨论铜库存。"))
+            ),
+            ("copper",),
+        )
+        self.assertEqual(
+            matcher.match(make_information("宏观报告", "正文讨论铜库存。")), ()
+        )
+
+        invalid_values = ("", "   ", "123", "true", "null", "[copper]", "{alias: 铜}", "copper", "铜专题", "铜铜")
+        for value in invalid_values:
+            with self.subTest(value=value):
+                registry = (
+                    "commodities:\n"
+                    "  copper:\n"
+                    "    label: Copper\n"
+                    "    aliases:\n"
+                    "      - copper\n"
+                    "    title_topic_aliases:\n"
+                    f"      - {value}\n"
+                )
+                with self.assertRaises(ValueError):
+                    self._load_matcher_from_registry(registry)
+
+        for registry in (
+            """commodities:
+  copper:
+    label: Copper
+    aliases:
+      - copper
+    title_topic_aliases:
+      - 铜
+      - 铜
+""",
+            """commodities:
+  copper:
+    label: Copper
+    aliases:
+      - copper
+    title_topic_aliases:
+      - copper
+""",
+        ):
+            with self.subTest(registry=registry):
+                with self.assertRaises(ValueError):
+                    self._load_matcher_from_registry(registry)
 
     @staticmethod
     def _registry_with_alias(key: str, label: str, alias: str) -> str:

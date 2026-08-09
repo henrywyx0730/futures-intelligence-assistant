@@ -34,6 +34,10 @@ commodities:
     label: Copper
     aliases:
       - copper
+      - refined copper
+      - 电解铜
+    title_topic_aliases:
+      - 铜
   aluminum:
     label: Aluminum
     aliases:
@@ -50,6 +54,7 @@ commodities:
     label: Silver
     aliases:
       - silver
+      - 白银
   gold:
     label: Gold
     aliases:
@@ -102,6 +107,8 @@ ambiguous_alias_exclusions:
     - vegetable oil
     - canola oil
     - sunflower oil
+  白银:
+    - 白银色
   丙烯:
     - 聚丙烯
     - 聚丙烯期货

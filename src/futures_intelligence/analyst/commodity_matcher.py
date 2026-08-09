@@ -22,6 +22,12 @@ class CommodityDefinition:
     commodity_key: str
     commodity_label: str
     aliases: tuple[str, ...]
+    title_topic_aliases: tuple[str, ...] = ()
+
+    @property
+    def all_aliases(self) -> tuple[str, ...]:
+        """Return ordinary aliases followed by title-only topic aliases."""
+        return self.aliases + self.title_topic_aliases
 
 
 @dataclass(frozen=True)
@@ -105,6 +111,7 @@ class CommodityMatcher:
         """Return flat matches plus selected field-local lexical provenance."""
         selected_candidates = self._resolve_overlaps(
             self._collect_candidates(information.title, field_index=0)
+            + self._collect_title_topic_candidates(information.title)
             + self._collect_candidates(information.content, field_index=1)
         )
         matches = self._build_matches(selected_candidates)
@@ -150,7 +157,7 @@ class CommodityMatcher:
                     for _, alias in sorted(
                         (
                             (alias_index, alias)
-                            for alias_index, alias in enumerate(definition.aliases)
+                            for alias_index, alias in enumerate(definition.all_aliases)
                             if alias_index
                             in selected_aliases.get(commodity_index, set())
                         ),
@@ -188,6 +195,33 @@ class CommodityMatcher:
                             alias,
                             match.start(),
                             match.end(),
+                        )
+                    )
+        return tuple(candidates)
+
+    def _collect_title_topic_candidates(self, title: str) -> tuple[_AliasCandidate, ...]:
+        """Collect one-character CJK aliases only from strong report-title structures."""
+        normalized_title = title.casefold()
+        candidates: list[_AliasCandidate] = []
+        for commodity_index, definition in enumerate(self._definitions):
+            for topic_alias_index, alias in enumerate(definition.title_topic_aliases):
+                alias_index = len(definition.aliases) + topic_alias_index
+                exclusion_spans = self._exclusion_spans(normalized_title, alias)
+                for match in re.finditer(_title_topic_alias_pattern(alias), normalized_title):
+                    start, end = match.span("alias")
+                    if any(
+                        _spans_overlap(start, end, exclusion_start, exclusion_end)
+                        for exclusion_start, exclusion_end in exclusion_spans
+                    ):
+                        continue
+                    candidates.append(
+                        _AliasCandidate(
+                            0,
+                            commodity_index,
+                            alias_index,
+                            alias,
+                            start,
+                            end,
                         )
                     )
         return tuple(candidates)
@@ -247,6 +281,15 @@ def _alias_pattern(alias: str) -> str:
     return f"{prefix}{pattern}{suffix}"
 
 
+def _title_topic_alias_pattern(alias: str) -> str:
+    """Build one escaped title-only topic alias pattern with a safe context gate."""
+    return (
+        r"(?:^|期货|[\s:：\-—/·])"
+        rf"(?P<alias>{re.escape(alias.casefold())})"
+        r"(?:专题|期货|周报|月报|季报|年报|策略|调研|报告)"
+    )
+
+
 def _is_ascii_word_character(character: str) -> bool:
     """Return whether one character needs an ASCII token boundary."""
     return character.isascii() and (character.isalnum() or character == "_")
@@ -266,18 +309,26 @@ def _load_commodity_registry() -> tuple[
     key: str | None = None
     label: str | None = None
     aliases: list[str] = []
+    title_topic_aliases: list[str] = []
+    alias_field: str | None = None
     excluded_alias: str | None = None
     excluded_phrases: list[str] = []
     section = "commodities"
 
     def add_definition() -> None:
-        if key is None and label is None and not aliases:
+        if key is None and label is None and not aliases and not title_topic_aliases:
             return
         if not key or not label or not aliases:
             raise ValueError("Each commodity entry must define a key, label, and aliases")
         _validate_aliases(key, aliases)
+        _validate_title_topic_aliases(key, aliases, title_topic_aliases)
         definitions.append(
-            CommodityDefinition(key, label, tuple(alias.casefold() for alias in aliases))
+            CommodityDefinition(
+                key,
+                label,
+                tuple(alias.casefold() for alias in aliases),
+                tuple(alias.casefold() for alias in title_topic_aliases),
+            )
         )
 
     def add_exclusions() -> None:
@@ -306,6 +357,8 @@ def _load_commodity_registry() -> tuple[
             key = None
             label = None
             aliases = []
+            title_topic_aliases = []
+            alias_field = None
             section = "ambiguous_alias_exclusions"
         elif section == "commodities" and indentation == 2 and stripped.endswith(":"):
             add_definition()
@@ -315,19 +368,33 @@ def _load_commodity_registry() -> tuple[
             )
             label = None
             aliases = []
+            title_topic_aliases = []
+            alias_field = None
         elif section == "commodities" and indentation == 4 and stripped.startswith("label:"):
             label = _parse_string_scalar(
                 stripped.removeprefix("label:").strip(),
                 f"Commodity {key or '<unknown>'} label",
             )
         elif section == "commodities" and indentation == 4 and stripped == "aliases:":
-            continue
-        elif section == "commodities" and indentation == 6 and stripped.startswith("- "):
-            aliases.append(
-                _parse_string_scalar(
-                    stripped.removeprefix("- ").strip(),
-                    f"Commodity {key or '<unknown>'} alias",
-                )
+            alias_field = "aliases"
+        elif (
+            section == "commodities"
+            and indentation == 4
+            and stripped == "title_topic_aliases:"
+        ):
+            alias_field = "title_topic_aliases"
+        elif (
+            section == "commodities"
+            and indentation == 6
+            and stripped.startswith("- ")
+            and alias_field in {"aliases", "title_topic_aliases"}
+        ):
+            value = _parse_string_scalar(
+                stripped.removeprefix("- ").strip(),
+                f"Commodity {key or '<unknown>'} {alias_field.removesuffix('es')}",
+            )
+            (aliases if alias_field == "aliases" else title_topic_aliases).append(
+                value
             )
         elif section == "ambiguous_alias_exclusions" and indentation == 2 and stripped.endswith(":"):
             add_exclusions()
@@ -363,6 +430,25 @@ def _validate_aliases(commodity_key: str, aliases: list[str]) -> None:
         if len(alias) == 1 and _is_cjk_ideograph(alias):
             raise ValueError(
                 f"Commodity {commodity_key} has an unsafe one-character CJK alias"
+            )
+
+
+def _validate_title_topic_aliases(
+    commodity_key: str,
+    aliases: list[str],
+    title_topic_aliases: list[str],
+) -> None:
+    """Allow only reviewed one-character CJK aliases through the title grammar."""
+    if len(title_topic_aliases) != len(set(title_topic_aliases)):
+        raise ValueError(f"Commodity {commodity_key} has duplicate title topic aliases")
+    for alias in title_topic_aliases:
+        if len(alias) != 1 or not _is_cjk_ideograph(alias):
+            raise ValueError(
+                f"Commodity {commodity_key} title topic aliases must be one CJK ideograph"
+            )
+        if alias in aliases:
+            raise ValueError(
+                f"Commodity {commodity_key} title topic aliases duplicate ordinary aliases"
             )
 
 

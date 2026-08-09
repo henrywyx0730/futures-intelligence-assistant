@@ -158,6 +158,48 @@ class CommodityRelevanceTests(unittest.TestCase):
         self.assertEqual(empty.primary, ())
         self.assertEqual(empty.mentioned, ())
 
+    def test_chinese_silver_title_and_content_evidence_have_expected_relevance_roles(self) -> None:
+        resolver = CommodityRelevanceResolver()
+
+        title_assessment = resolver.assess(
+            make_information("白银期货动态策略研究", "Details.")
+        )
+        content_assessment = resolver.assess(
+            make_information("量化策略报告", "正文讨论白银库存。")
+        )
+
+        self.assertEqual(
+            tuple(item.commodity_key for item in title_assessment.primary), ("silver",)
+        )
+        self.assertEqual(title_assessment.mentioned, ())
+        self.assertEqual(content_assessment.primary, ())
+        self.assertEqual(
+            tuple(item.commodity_key for item in content_assessment.mentioned), ("silver",)
+        )
+
+    def test_copper_title_topic_evidence_is_primary_while_body_only_is_mentioned(self) -> None:
+        resolver = CommodityRelevanceResolver()
+
+        title_assessment = resolver.assess(
+            make_information("某期货铜专题报告", "电解铜库存变化。")
+        )
+        content_assessment = resolver.assess(
+            make_information("宏观政策跟踪", "电解铜库存变化。")
+        )
+
+        self.assertEqual(
+            tuple(item.commodity_key for item in title_assessment.lexical_matches),
+            ("copper",),
+        )
+        self.assertEqual(
+            tuple(item.commodity_key for item in title_assessment.primary), ("copper",)
+        )
+        self.assertEqual(title_assessment.mentioned, ())
+        self.assertEqual(content_assessment.primary, ())
+        self.assertEqual(
+            tuple(item.commodity_key for item in content_assessment.mentioned), ("copper",)
+        )
+
     def test_calls_matcher_once_and_propagates_unexpected_exception(self) -> None:
         actual = CommodityMatcher().match_with_evidence(make_information("乙二醇专题", "正文。"))
         matcher = _EvidenceMatcher(actual)
