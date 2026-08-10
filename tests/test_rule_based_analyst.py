@@ -12,6 +12,7 @@ from futures_intelligence.analyst.commodity_matcher import (
 from futures_intelligence.analyst.commodity_relevance import (
     CommodityRelevance,
     CommodityRelevanceAssessment,
+    CommodityRelevanceResolver,
 )
 from futures_intelligence.analyst.rule_based import RuleBasedAnalyst
 from futures_intelligence.models import MarketInformation
@@ -517,6 +518,293 @@ class RuleBasedAnalystTests(unittest.TestCase):
             "Observed market movement: Oil prices jumped 2%.",
             movement_analysis.reasoning_details,
         )
+
+    def test_chinese_factual_fundamentals_preserve_metadata_and_movement_priorities(
+        self,
+    ) -> None:
+        metadata_analysis = self.analyst.analyze(
+            [
+                make_information(
+                    "原油供应收紧。",
+                    "Market context.",
+                    source_type="research_report",
+                    metadata={"price_change": -2.0},
+                )
+            ]
+        )[0]
+        movement_analysis = self.analyst.analyze(
+            [
+                make_information(
+                    "原油供应收紧。",
+                    "Oil prices fell 2%.",
+                    source_type="research_report",
+                )
+            ]
+        )[0]
+
+        self.assertEqual(metadata_analysis.market_direction, "bearish")
+        self.assertIn(
+            "Structured price change is negative (-2.0).",
+            metadata_analysis.reasoning_details,
+        )
+        self.assertEqual(movement_analysis.market_direction, "bearish")
+        self.assertIn(
+            "Observed market movement: Oil prices fell 2%.",
+            movement_analysis.reasoning_details,
+        )
+        self.assertNotIn(
+            "Detected direct supply tightening for Crude Oil.",
+            metadata_analysis.reasoning_details + movement_analysis.reasoning_details,
+        )
+
+    def test_chinese_factual_fundamentals_require_primary_research_scope(self) -> None:
+        mentioned_information = make_information(
+            "宏观政策跟踪",
+            "原油供应收紧。",
+            source_type="research_report",
+        )
+        relevance = CommodityRelevanceResolver().assess(mentioned_information)
+        mentioned = self.analyst.analyze([mentioned_information])[0]
+        non_research = self.analyst.analyze(
+            [make_information("原油供应收紧。", "Market context.", source_type="rss")]
+        )[0]
+
+        self.assertEqual(relevance.primary, ())
+        self.assertEqual(
+            tuple(item.commodity_key for item in relevance.mentioned),
+            ("crude_oil",),
+        )
+        self.assertEqual(mentioned.market_direction, "neutral")
+        self.assertEqual(mentioned.confidence_score, 50)
+        self.assertEqual(non_research.market_direction, "neutral")
+        self.assertNotIn("Detected direct", " ".join(mentioned.reasoning_details))
+        self.assertNotIn("Detected direct", " ".join(non_research.reasoning_details))
+
+    def test_chinese_factual_fundamentals_do_not_assign_mentioned_clauses_to_primary(
+        self,
+    ) -> None:
+        information = make_information(
+            "原油专题",
+            "燃料油供应收紧。",
+            source_type="research_report",
+        )
+        relevance = CommodityRelevanceResolver().assess(information)
+        analysis = self.analyst.analyze([information])[0]
+
+        self.assertEqual(
+            tuple(item.commodity_key for item in relevance.primary),
+            ("crude_oil",),
+        )
+        self.assertEqual(
+            tuple(item.commodity_key for item in relevance.mentioned),
+            ("fuel_oil",),
+        )
+        self.assertEqual(analysis.market_direction, "neutral")
+        self.assertEqual(analysis.confidence_score, 60)
+        self.assertIn("Primary commodity focus: Crude Oil.", analysis.reasoning_details)
+        self.assertIn(
+            "Mentioned tracked commodities: Fuel Oil.",
+            analysis.reasoning_details,
+        )
+        self.assertNotIn(
+            "Detected direct supply tightening for Crude Oil.",
+            analysis.reasoning_details,
+        )
+
+    def test_chinese_factual_fundamentals_keep_explicit_primary_clause_local(
+        self,
+    ) -> None:
+        information = make_information(
+            "原油专题",
+            "原油供应收紧；燃料油市场受到关注。",
+            source_type="research_report",
+        )
+        relevance = CommodityRelevanceResolver().assess(information)
+        analysis = self.analyst.analyze([information])[0]
+
+        self.assertEqual(
+            tuple(item.commodity_key for item in relevance.primary),
+            ("crude_oil",),
+        )
+        self.assertEqual(
+            tuple(item.commodity_key for item in relevance.mentioned),
+            ("fuel_oil",),
+        )
+
+        self.assertEqual(analysis.market_direction, "bullish")
+        self.assertEqual(analysis.confidence_score, 75)
+        self.assertIn(
+            "Primary commodity focus: Crude Oil.", analysis.reasoning_details
+        )
+        self.assertIn(
+            "Mentioned tracked commodities: Fuel Oil.", analysis.reasoning_details
+        )
+        self.assertIn(
+            "Detected direct supply tightening for Crude Oil.",
+            analysis.reasoning_details,
+        )
+
+    def test_chinese_factual_fundamentals_allow_implicit_primary_after_other_clause(
+        self,
+    ) -> None:
+        information = make_information(
+            "原油专题",
+            "燃料油市场受到关注。供应收紧。",
+            source_type="research_report",
+        )
+        relevance = CommodityRelevanceResolver().assess(information)
+        analysis = self.analyst.analyze([information])[0]
+
+        self.assertEqual(
+            tuple(item.commodity_key for item in relevance.primary),
+            ("crude_oil",),
+        )
+        self.assertEqual(
+            tuple(item.commodity_key for item in relevance.mentioned),
+            ("fuel_oil",),
+        )
+        self.assertEqual(analysis.market_direction, "bullish")
+        self.assertEqual(analysis.confidence_score, 75)
+        self.assertIn(
+            "Primary commodity focus: Crude Oil.", analysis.reasoning_details
+        )
+        self.assertIn(
+            "Mentioned tracked commodities: Fuel Oil.", analysis.reasoning_details
+        )
+        self.assertIn(
+            "Detected direct supply tightening for Crude Oil.",
+            analysis.reasoning_details,
+        )
+
+    def test_chinese_factual_fundamentals_abstain_for_multi_primary_ambiguity(self) -> None:
+        analysis = self.analyst.analyze(
+            [
+                make_information(
+                    "原油与燃料油专题",
+                    "供应收紧。",
+                    source_type="research_report",
+                )
+            ]
+        )[0]
+
+        self.assertEqual(analysis.market_direction, "neutral")
+        self.assertNotIn("Detected direct", " ".join(analysis.reasoning_details))
+
+    def test_chinese_factual_fundamentals_are_clause_local_and_conflict_safe(self) -> None:
+        separated = self.analyst.analyze(
+            [
+                make_information(
+                    "原油供应情况值得关注。价格出现下降。",
+                    "Market context.",
+                    source_type="research_report",
+                )
+            ]
+        )[0]
+        conflicting = self.analyst.analyze(
+            [
+                make_information(
+                    "原油供应收紧；原油供应增加。",
+                    "Market context.",
+                    source_type="research_report",
+                )
+            ]
+        )[0]
+
+        self.assertEqual(separated.market_direction, "neutral")
+        self.assertEqual(conflicting.market_direction, "neutral")
+        self.assertEqual(conflicting.confidence_score, 60)
+        self.assertIn(
+            "Conflicting bullish and bearish direct factual signals were detected.",
+            conflicting.reasoning_details,
+        )
+
+    def test_chinese_factual_fundamentals_keep_resolved_signal_confidence(self) -> None:
+        bullish, bearish = self.analyst.analyze(
+            [
+                make_information(
+                    "原油供应收紧。",
+                    "Market context.",
+                    source_type="research_report",
+                ),
+                make_information(
+                    "原油供应增加。",
+                    "Market context.",
+                    source_type="research_report",
+                ),
+            ]
+        )
+
+        self.assertEqual((bullish.market_direction, bullish.confidence_score), ("bullish", 75))
+        self.assertEqual((bearish.market_direction, bearish.confidence_score), ("bearish", 75))
+
+    def test_same_direction_chinese_facts_keep_bounded_fundamental_confidence(self) -> None:
+        single = self.analyst.analyze(
+            [
+                make_information(
+                    "生猪库存下降。",
+                    "Market context.",
+                    source_type="research_report",
+                )
+            ]
+        )[0]
+        multiple = self.analyst.analyze(
+            [
+                make_information(
+                    "生猪库存下降；生猪库存下降。",
+                    "Market context.",
+                    source_type="research_report",
+                )
+            ]
+        )[0]
+
+        self.assertEqual(single.market_direction, "bullish")
+        self.assertEqual(multiple.market_direction, "bullish")
+        self.assertEqual(single.confidence_score, 75)
+        self.assertEqual(multiple.confidence_score, single.confidence_score)
+
+    def test_chinese_factual_fundamentals_abstain_for_g3b_forms(self) -> None:
+        titles = (
+            "原油供应收紧并未发生。",
+            "原油供应收紧预期不明确。",
+            "如果原油供应收紧，价格可能上涨。",
+            "预计原油供应收紧。",
+            "原油供应收紧，但需求疲弱。",
+        )
+
+        for title in titles:
+            with self.subTest(title=title):
+                analysis = self.analyst.analyze(
+                    [make_information(title, "Market context.", source_type="research_report")]
+                )[0]
+                self.assertEqual(analysis.market_direction, "neutral")
+                self.assertNotIn("Detected direct", " ".join(analysis.reasoning_details))
+
+    def test_chinese_factual_rules_generalize_without_generic_sentiment(self) -> None:
+        paraphrase = self.analyst.analyze(
+            [
+                make_information(
+                    "燃料油专题",
+                    "燃料油供给减少。",
+                    source_type="research_report",
+                )
+            ]
+        )[0]
+        sentiment = self.analyst.analyze(
+            [
+                make_information(
+                    "原油市场情绪乐观。",
+                    "Market context.",
+                    source_type="research_report",
+                )
+            ]
+        )[0]
+
+        self.assertEqual(paraphrase.market_direction, "bullish")
+        self.assertIn(
+            "Detected direct supply reduction for Fuel Oil.",
+            paraphrase.reasoning_details,
+        )
+        self.assertEqual(sentiment.market_direction, "neutral")
 
     def test_non_research_content_commodity_retains_flat_rule_behavior(self) -> None:
         analysis = self.analyst.analyze(

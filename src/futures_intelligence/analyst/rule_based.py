@@ -9,6 +9,10 @@ from futures_intelligence.analyst.commodity_matcher import (
     phrase_matches,
 )
 from futures_intelligence.analyst.commodity_relevance import CommodityRelevanceResolver
+from futures_intelligence.analyst.fundamental_signal import (
+    ChineseFundamentalSignalDetector,
+    FundamentalSignal,
+)
 from futures_intelligence.analyst.market_movement import (
     NUMERICAL_PRIORITY,
     SETTLEMENT_PRIORITY,
@@ -73,6 +77,7 @@ class RuleBasedAnalyst(BaseAnalyst):
             else CommodityRelevanceResolver(matcher=self._commodity_matcher)
         )
         self._market_movement_detector = MarketMovementDetector()
+        self._fundamental_signal_detector = ChineseFundamentalSignalDetector()
 
     def analyze(self, information: list[MarketInformation]) -> list[MarketAnalysis]:
         """Return one deterministic analysis for each information item."""
@@ -94,11 +99,17 @@ class RuleBasedAnalyst(BaseAnalyst):
             )
             commodities = _commodity_labels(primary_matches)
             mentioned_commodities = _commodity_labels(mentioned_matches)
+            fundamental_signals = self._fundamental_signal_detector.detect(
+                item,
+                primary_matches,
+                commodity_matches,
+            )
             summary = _research_report_summary(commodities)
         else:
             commodity_matches = self._commodity_matcher.match(item)
             commodities = _commodity_labels(commodity_matches)
             mentioned_commodities = ()
+            fundamental_signals = ()
             summary = _summary_for_commodities(commodities)
         market_direction, directional_details, directional_confidence = (
             _directional_signals(
@@ -106,6 +117,7 @@ class RuleBasedAnalyst(BaseAnalyst):
                 text,
                 commodities,
                 self._market_movement_detector.detect(item, commodity_matches),
+                fundamental_signals,
             )
         )
         reasoning_details = [
@@ -176,6 +188,7 @@ def _directional_signals(
     text: str,
     detected_commodities: tuple[str, ...],
     movement_signal: MarketMovementSignal,
+    fundamental_signals: tuple[FundamentalSignal, ...],
 ) -> tuple[str, tuple[str, ...], int]:
     """Determine direction from structured quote data or deterministic text terms."""
     price_change = item.metadata.get("price_change")
@@ -207,21 +220,55 @@ def _directional_signals(
             ),
         )
 
+    factual_directions = {signal.direction for signal in fundamental_signals}
+    if factual_directions == {"bullish", "bearish"}:
+        return (
+            "neutral",
+            ("Conflicting bullish and bearish direct factual signals were detected.",),
+            0,
+        )
+
     bullish_matches = _matched_keywords(text, BULLISH_KEYWORDS)
     bearish_matches = _matched_keywords(text, BEARISH_KEYWORDS)
     commodity_bullish, commodity_bearish, commodity_details = _commodity_signals(
         text,
         detected_commodities,
     )
-    bullish_details = _generic_signal_details(
-        "Bullish", bullish_matches
-    ) + commodity_details[0]
-    bearish_details = _generic_signal_details(
-        "Bearish", bearish_matches
-    ) + commodity_details[1]
-    bullish_count = len(bullish_matches) + len(commodity_bullish)
-    bearish_count = len(bearish_matches) + len(commodity_bearish)
-    confidence = 15 if commodity_bullish or commodity_bearish else 10
+    factual_bullish_details = tuple(
+        signal.reasoning
+        for signal in fundamental_signals
+        if signal.direction == "bullish"
+    )
+    factual_bearish_details = tuple(
+        signal.reasoning
+        for signal in fundamental_signals
+        if signal.direction == "bearish"
+    )
+    bullish_details = (
+        _generic_signal_details("Bullish", bullish_matches)
+        + commodity_details[0]
+        + factual_bullish_details
+    )
+    bearish_details = (
+        _generic_signal_details("Bearish", bearish_matches)
+        + commodity_details[1]
+        + factual_bearish_details
+    )
+    bullish_count = (
+        len(bullish_matches)
+        + len(commodity_bullish)
+        + bool(factual_bullish_details)
+    )
+    bearish_count = (
+        len(bearish_matches)
+        + len(commodity_bearish)
+        + bool(factual_bearish_details)
+    )
+    confidence = (
+        15
+        if commodity_bullish or commodity_bearish or fundamental_signals
+        else 10
+    )
     if bullish_count > bearish_count:
         return (
             "bullish",

@@ -29,15 +29,15 @@ class ChineseDeterministicAnalysisCorpusTests(unittest.TestCase):
     def setUp(self) -> None:
         self.corpus = load_chinese_deterministic_corpus()
 
-    def test_fixture_loads_with_g2_commodity_enforcement_only(self) -> None:
-        """Activate only the approved commodity-identity implementation phase."""
+    def test_fixture_loads_with_g2_and_g3a_enforcement_only(self) -> None:
+        """Activate commodity identity and direct factual direction only."""
         self.assertTrue(FIXTURE_PATH.is_file())
         self.assertEqual(self.corpus.schema_version, 1)
-        self.assertEqual(self.corpus.active_enforcement_phases, ("g2",))
-        self.assertNotIn("g3a", self.corpus.active_enforcement_phases)
+        self.assertEqual(self.corpus.active_enforcement_phases, ("g2", "g3a"))
         self.assertNotIn("g3b", self.corpus.active_enforcement_phases)
         self.assertNotIn("g4", self.corpus.active_enforcement_phases)
         self.assertEqual(len(cases_for_phase(self.corpus, "g2")), 55)
+        self.assertEqual(len(cases_for_phase(self.corpus, "g3a")), 12)
 
     def test_has_exact_case_count_and_primary_category_distribution(self) -> None:
         """Keep the initial corpus deliberately small and reviewable."""
