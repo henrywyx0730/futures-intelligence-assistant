@@ -29,15 +29,14 @@ class ChineseDeterministicAnalysisCorpusTests(unittest.TestCase):
     def setUp(self) -> None:
         self.corpus = load_chinese_deterministic_corpus()
 
-    def test_fixture_loads_with_g3b1_qualification_enforcement(self) -> None:
-        """Activate reviewed qualification semantics without G3b2 or G4."""
+    def test_fixture_loads_with_g3b2_conflict_and_horizon_enforcement(self) -> None:
+        """Activate reviewed G3B2 semantics without activating G4."""
         self.assertTrue(FIXTURE_PATH.is_file())
         self.assertEqual(self.corpus.schema_version, 1)
         self.assertEqual(
             self.corpus.active_enforcement_phases,
-            ("g2", "g3a", "g3b1"),
+            ("g2", "g3a", "g3b1", "g3b2"),
         )
-        self.assertNotIn("g3b2", self.corpus.active_enforcement_phases)
         self.assertNotIn("g4", self.corpus.active_enforcement_phases)
         self.assertEqual(len(cases_for_phase(self.corpus, "g2")), 55)
         self.assertEqual(len(cases_for_phase(self.corpus, "g3a")), 12)
@@ -256,6 +255,34 @@ class ChineseDeterministicAnalysisCorpusTests(unittest.TestCase):
 
                 with self.assertRaisesRegex(ValueError, "G3B2 semantic"):
                     _parse_corpus_payload(malformed_payload)
+
+    def test_loader_rejects_qualification_only_case_relabelled_as_g3b2(self) -> None:
+        """Keep qualification-only semantics in G3B1 under coordinated edits."""
+        payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        case = next(
+            item
+            for item in payload["cases"]
+            if item["id"] == "aluminum-forecast-inventory-decline"
+        )
+        case["enforcement"]["direction"] = "g3b2"
+
+        with self.assertRaisesRegex(ValueError, "inconsistent G3b phase"):
+            _parse_corpus_payload(payload)
+
+    def test_loader_rejects_relative_value_case_relabelled_as_g3b2(self) -> None:
+        """Keep G4 relative-value semantics out of G3B2 under coordinated edits."""
+        payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        case = next(
+            item
+            for item in payload["cases"]
+            if item["id"] == "aluminum-cast-alloy-arbitrage"
+        )
+        case["expected"]["signal_kind"] = "horizon_conflict"
+        case["enforcement"]["direction"] = "g3b2"
+        case["enforcement"]["relative_value"] = "not_applicable"
+
+        with self.assertRaisesRegex(ValueError, "relative-value deferral"):
+            _parse_corpus_payload(payload)
 
     def test_loader_rejects_duplicate_json_keys(self) -> None:
         """Reject duplicate names before JSON decoding can apply last-value-wins."""

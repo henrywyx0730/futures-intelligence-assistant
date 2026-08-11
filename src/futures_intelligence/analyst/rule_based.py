@@ -11,6 +11,7 @@ from futures_intelligence.analyst.commodity_matcher import (
 from futures_intelligence.analyst.commodity_relevance import CommodityRelevanceResolver
 from futures_intelligence.analyst.fundamental_signal import (
     ChineseFundamentalSignalDetector,
+    FundamentalConflict,
     FundamentalQualification,
     FundamentalSignal,
 )
@@ -107,6 +108,7 @@ class RuleBasedAnalyst(BaseAnalyst):
             )
             fundamental_signals = fundamental_detection.signals
             fundamental_qualifications = fundamental_detection.qualifications
+            fundamental_conflicts = fundamental_detection.conflicts
             summary = _research_report_summary(commodities)
         else:
             commodity_matches = self._commodity_matcher.match(item)
@@ -114,6 +116,7 @@ class RuleBasedAnalyst(BaseAnalyst):
             mentioned_commodities = ()
             fundamental_signals = ()
             fundamental_qualifications = ()
+            fundamental_conflicts = ()
             summary = _summary_for_commodities(commodities)
         market_direction, directional_details, directional_confidence = (
             _directional_signals(
@@ -123,6 +126,7 @@ class RuleBasedAnalyst(BaseAnalyst):
                 self._market_movement_detector.detect(item, commodity_matches),
                 fundamental_signals,
                 fundamental_qualifications,
+                fundamental_conflicts,
             )
         )
         reasoning_details = [
@@ -195,6 +199,7 @@ def _directional_signals(
     movement_signal: MarketMovementSignal,
     fundamental_signals: tuple[FundamentalSignal, ...],
     fundamental_qualifications: tuple[FundamentalQualification, ...],
+    fundamental_conflicts: tuple[FundamentalConflict, ...],
 ) -> tuple[str, tuple[str, ...], int]:
     """Determine direction from structured quote data or deterministic text terms."""
     price_change = item.metadata.get("price_change")
@@ -226,11 +231,50 @@ def _directional_signals(
             ),
         )
 
-    factual_directions = {signal.direction for signal in fundamental_signals}
-    if factual_directions == {"bullish", "bearish"}:
+    if fundamental_conflicts:
+        if len(fundamental_conflicts) == 1:
+            return (
+                "neutral",
+                (fundamental_conflicts[0].reasoning,),
+                0,
+            )
+        return (
+            "neutral",
+            ("Conflicting direct fundamentals span multiple primary commodities.",),
+            0,
+        )
+
+    directions_by_commodity = {
+        commodity_key: {
+            signal.direction
+            for signal in fundamental_signals
+            if signal.commodity_key == commodity_key
+        }
+        for commodity_key in dict.fromkeys(
+            signal.commodity_key for signal in fundamental_signals
+        )
+    }
+    if any(
+        directions == {"bullish", "bearish"}
+        for directions in directions_by_commodity.values()
+    ):
         return (
             "neutral",
             ("Conflicting bullish and bearish direct factual signals were detected.",),
+            0,
+        )
+    factual_directions = {
+        direction
+        for directions in directions_by_commodity.values()
+        for direction in directions
+    }
+    if factual_directions == {"bullish", "bearish"}:
+        return (
+            "neutral",
+            (
+                "Opposing direct fundamentals concern different primary commodities; "
+                "no single report-level direction was assigned.",
+            ),
             0,
         )
 
@@ -250,15 +294,27 @@ def _directional_signals(
         for signal in fundamental_signals
         if signal.direction == "bearish"
     )
+    qualification_details = (
+        tuple(
+            dict.fromkeys(
+                qualification.reasoning
+                for qualification in fundamental_qualifications
+            )
+        )
+        if fundamental_signals
+        else ()
+    )
     bullish_details = (
         _generic_signal_details("Bullish", bullish_matches)
         + commodity_details[0]
         + factual_bullish_details
+        + qualification_details
     )
     bearish_details = (
         _generic_signal_details("Bearish", bearish_matches)
         + commodity_details[1]
         + factual_bearish_details
+        + qualification_details
     )
     bullish_count = (
         len(bullish_matches)

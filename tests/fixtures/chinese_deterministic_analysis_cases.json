@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "active_enforcement_phases": ["g2", "g3a", "g3b1"],
+  "active_enforcement_phases": ["g2", "g3a", "g3b1", "g3b2"],
   "cases": [
     {
       "id": "live-hog-basic-identity",

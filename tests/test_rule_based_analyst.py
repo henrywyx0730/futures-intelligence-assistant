@@ -14,6 +14,10 @@ from futures_intelligence.analyst.commodity_relevance import (
     CommodityRelevanceAssessment,
     CommodityRelevanceResolver,
 )
+from futures_intelligence.analyst.fundamental_signal import (
+    ChineseFundamentalSignalDetector,
+    FundamentalSignal,
+)
 from futures_intelligence.analyst.rule_based import RuleBasedAnalyst
 from futures_intelligence.models import MarketInformation
 
@@ -964,6 +968,400 @@ class RuleBasedAnalystTests(unittest.TestCase):
                 "fundamental statement",
                 " ".join(analysis.reasoning_details),
             )
+
+    def test_g3b2_clause_local_negation_preserves_independent_direct_fact(self) -> None:
+        analysis = self.analyst.analyze(
+            [
+                make_information(
+                    "原油供应并未收紧，但需求明显改善。",
+                    "Market context.",
+                    source_type="research_report",
+                )
+            ]
+        )[0]
+
+        self.assertEqual(
+            (analysis.market_direction, analysis.confidence_score),
+            ("bullish", 75),
+        )
+        self.assertIn(
+            "Detected a negated fundamental statement; "
+            "no realized factual direction was assigned.",
+            analysis.reasoning_details,
+        )
+        self.assertIn(
+            "Detected direct demand improvement for Crude Oil.",
+            analysis.reasoning_details,
+        )
+        self.assertNotIn(
+            "Detected direct supply tightening for Crude Oil.",
+            analysis.reasoning_details,
+        )
+
+    def test_g3b2_conditional_scope_survives_chinese_comma(self) -> None:
+        information = make_information(
+            "原油专题",
+            "如果制裁升级，供应收紧。",
+            source_type="research_report",
+        )
+        relevance = CommodityRelevanceResolver().assess(information)
+        primary_keys = {entry.commodity_key for entry in relevance.primary}
+        detection = ChineseFundamentalSignalDetector().detect(
+            information,
+            tuple(
+                match
+                for match in relevance.lexical_matches
+                if match.commodity_key in primary_keys
+            ),
+            relevance.lexical_matches,
+        )
+        analysis = self.analyst.analyze([information])[0]
+
+        self.assertEqual(
+            tuple(entry.commodity_key for entry in relevance.primary),
+            ("crude_oil",),
+        )
+        self.assertEqual(detection.signal_kind, "conditional_signal")
+        self.assertEqual(detection.signals, ())
+        self.assertEqual(
+            (analysis.market_direction, analysis.confidence_score),
+            ("neutral", 60),
+        )
+        self.assertIn(
+            "Primary commodity focus: Crude Oil.", analysis.reasoning_details
+        )
+        self.assertIn(
+            "Detected a conditional fundamental statement; "
+            "no realized factual direction was assigned.",
+            analysis.reasoning_details,
+        )
+        self.assertNotIn(
+            "Detected direct supply tightening for Crude Oil.",
+            analysis.reasoning_details,
+        )
+
+    def test_g3b2_conditional_scope_survives_ascii_comma(self) -> None:
+        information = make_information(
+            "原油专题",
+            "如果制裁升级,供应收紧。",
+            source_type="research_report",
+        )
+        relevance = CommodityRelevanceResolver().assess(information)
+        analysis = self.analyst.analyze([information])[0]
+
+        self.assertEqual(
+            tuple(entry.commodity_key for entry in relevance.primary),
+            ("crude_oil",),
+        )
+        self.assertEqual(
+            (analysis.market_direction, analysis.confidence_score),
+            ("neutral", 60),
+        )
+        self.assertIn(
+            "Detected a conditional fundamental statement; "
+            "no realized factual direction was assigned.",
+            analysis.reasoning_details,
+        )
+        self.assertNotIn(
+            "Detected direct supply tightening for Crude Oil.",
+            analysis.reasoning_details,
+        )
+
+    def test_g3b2_conflicting_legs_resolve_individually_but_abstain_together(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "原油供应收紧。",
+                "原油需求疲弱。",
+                "原油供应收紧，但需求疲弱。",
+            ),
+            (
+                "电解铝库存去化。",
+                "电解铝高库存仍限制上涨空间。",
+                "电解铝库存去化，但高库存仍限制上涨空间。",
+            ),
+        )
+
+        for bullish_title, bearish_title, conflict_title in cases:
+            with self.subTest(conflict_title=conflict_title):
+                bullish, bearish, conflict = self.analyst.analyze(
+                    [
+                        make_information(
+                            bullish_title,
+                            "Market context.",
+                            source_type="research_report",
+                        ),
+                        make_information(
+                            bearish_title,
+                            "Market context.",
+                            source_type="research_report",
+                        ),
+                        make_information(
+                            conflict_title,
+                            "Market context.",
+                            source_type="research_report",
+                        ),
+                    ]
+                )
+
+                self.assertEqual(
+                    (bullish.market_direction, bullish.confidence_score),
+                    ("bullish", 75),
+                )
+                self.assertEqual(
+                    (bearish.market_direction, bearish.confidence_score),
+                    ("bearish", 75),
+                )
+                self.assertEqual(
+                    (conflict.market_direction, conflict.confidence_score),
+                    ("neutral", 60),
+                )
+                self.assertIn(
+                    "Detected conflicting direct fundamental signals; "
+                    "no deterministic directional conclusion was assigned.",
+                    conflict.reasoning_details,
+                )
+
+    def test_g3b2_conflict_resolution_is_order_and_count_invariant(self) -> None:
+        analyses = self.analyst.analyze(
+            [
+                make_information(
+                    "原油需求疲弱，但供应收紧。",
+                    "Market context.",
+                    source_type="research_report",
+                ),
+                make_information(
+                    "原油供应收紧，原油供应收紧，但需求疲弱。",
+                    "Market context.",
+                    source_type="research_report",
+                ),
+            ]
+        )
+
+        self.assertEqual(
+            tuple((item.market_direction, item.confidence_score) for item in analyses),
+            (("neutral", 60), ("neutral", 60)),
+        )
+
+    def test_g3b2_horizon_legs_attach_locally_and_abstain_together(self) -> None:
+        matcher = CommodityMatcher()
+        resolver = CommodityRelevanceResolver(matcher=matcher)
+        detector = ChineseFundamentalSignalDetector()
+        cases = (
+            (
+                "燃料油短期偏强。",
+                "燃料油中长期承压。",
+                "燃料油短期偏强，中长期承压。",
+                ("short_term", "medium_long_term"),
+            ),
+            (
+                "当前电解铝供应偏紧。",
+                "电解铝专题",
+                "当前电解铝供应偏紧，后期产能将恢复。",
+                ("current", "future"),
+            ),
+        )
+
+        for bullish_title, bearish_title, conflict_title, expected_horizons in cases:
+            with self.subTest(conflict_title=conflict_title):
+                bearish_content = (
+                    "后期产能将恢复。" if bearish_title == "电解铝专题" else "Market context."
+                )
+                information = make_information(
+                    conflict_title,
+                    "Market context.",
+                    source_type="research_report",
+                )
+                relevance = resolver.assess(information)
+                primary_keys = {entry.commodity_key for entry in relevance.primary}
+                detection = detector.detect(
+                    information,
+                    tuple(
+                        match
+                        for match in relevance.lexical_matches
+                        if match.commodity_key in primary_keys
+                    ),
+                    relevance.lexical_matches,
+                )
+                bullish, bearish, conflict = self.analyst.analyze(
+                    [
+                        make_information(
+                            bullish_title,
+                            "Market context.",
+                            source_type="research_report",
+                        ),
+                        make_information(
+                            bearish_title,
+                            bearish_content,
+                            source_type="research_report",
+                        ),
+                        information,
+                    ]
+                )
+
+                self.assertEqual(
+                    tuple(signal.horizon for signal in detection.signals),
+                    expected_horizons,
+                )
+                self.assertEqual(
+                    (bullish.market_direction, bullish.confidence_score),
+                    ("bullish", 75),
+                )
+                self.assertEqual(
+                    (bearish.market_direction, bearish.confidence_score),
+                    ("bearish", 75),
+                )
+                self.assertEqual(
+                    (conflict.market_direction, conflict.confidence_score),
+                    ("neutral", 60),
+                )
+                self.assertIn(
+                    "Detected opposing fundamental signals across different time "
+                    "horizons; no single horizon-independent direction was assigned.",
+                    conflict.reasoning_details,
+                )
+
+    def test_g3b2_qualified_and_mentioned_propositions_do_not_create_conflict_legs(
+        self,
+    ) -> None:
+        qualified, mentioned = self.analyst.analyze(
+            [
+                make_information(
+                    "原油供应可能收紧，但需求疲弱。",
+                    "Market context.",
+                    source_type="research_report",
+                ),
+                make_information(
+                    "原油专题",
+                    "燃料油短期偏强，中长期承压。",
+                    source_type="research_report",
+                ),
+            ]
+        )
+
+        self.assertEqual(
+            (qualified.market_direction, qualified.confidence_score),
+            ("bearish", 75),
+        )
+        self.assertIn(
+            "Detected direct demand weakness for Crude Oil.",
+            qualified.reasoning_details,
+        )
+        self.assertEqual(
+            (mentioned.market_direction, mentioned.confidence_score),
+            ("neutral", 60),
+        )
+        self.assertIn(
+            "Mentioned tracked commodities: Fuel Oil.",
+            mentioned.reasoning_details,
+        )
+
+    def test_g3b2_multi_primary_opposition_remains_conservative(self) -> None:
+        information = make_information(
+            "原油与燃料油专题",
+            "原油供应收紧；燃料油供应宽松。",
+            source_type="research_report",
+        )
+        relevance = CommodityRelevanceResolver().assess(information)
+        primary_keys = {entry.commodity_key for entry in relevance.primary}
+        detection = ChineseFundamentalSignalDetector().detect(
+            information,
+            tuple(
+                match
+                for match in relevance.lexical_matches
+                if match.commodity_key in primary_keys
+            ),
+            relevance.lexical_matches,
+        )
+        analysis = self.analyst.analyze([information])[0]
+
+        self.assertEqual(
+            tuple(entry.commodity_key for entry in relevance.primary),
+            ("crude_oil", "fuel_oil"),
+        )
+        self.assertEqual(
+            tuple(
+                (signal.commodity_key, signal.direction)
+                for signal in detection.signals
+            ),
+            (("crude_oil", "bullish"), ("fuel_oil", "bearish")),
+        )
+        self.assertEqual(detection.conflicts, ())
+
+        self.assertEqual(
+            (analysis.market_direction, analysis.confidence_score),
+            ("neutral", 60),
+        )
+        self.assertNotIn(
+            "Conflicting bullish and bearish direct factual signals were detected.",
+            " ".join(analysis.reasoning_details),
+        )
+        self.assertNotIn(
+            "Detected conflicting direct fundamental signals",
+            " ".join(analysis.reasoning_details),
+        )
+        self.assertIn(
+            "Opposing direct fundamentals concern different primary commodities; "
+            "no single report-level direction was assigned.",
+            analysis.reasoning_details,
+        )
+
+    def test_fundamental_signal_horizon_is_canonical(self) -> None:
+        fields = {
+            "commodity_key": "fuel_oil",
+            "commodity_label": "Fuel Oil",
+            "direction": "bullish",
+            "signal_family": "horizon",
+            "rule_id": "test_horizon",
+            "reasoning": "Bounded test reasoning.",
+        }
+
+        for horizon in (None, "short_term", "medium_long_term", "current", "future"):
+            with self.subTest(horizon=horizon):
+                signal = FundamentalSignal(**fields, horizon=horizon)
+                self.assertEqual(signal.horizon, horizon)
+
+        for horizon in ("tomorrow", "longish"):
+            with self.subTest(horizon=horizon):
+                with self.assertRaises(ValueError):
+                    FundamentalSignal(**fields, horizon=horizon)
+
+    def test_g3b2_conflicts_preserve_metadata_and_movement_priorities(self) -> None:
+        metadata, movement = self.analyst.analyze(
+            [
+                make_information(
+                    "原油供应收紧，但需求疲弱。",
+                    "Market context.",
+                    source_type="research_report",
+                    metadata={"price_change": 2.0},
+                ),
+                make_information(
+                    "原油供应收紧，但需求疲弱。",
+                    "Oil prices fell 2%.",
+                    source_type="research_report",
+                ),
+            ]
+        )
+
+        self.assertEqual(
+            (metadata.market_direction, metadata.confidence_score),
+            ("bullish", 80),
+        )
+        self.assertIn(
+            "Structured price change is positive (2.0).",
+            metadata.reasoning_details,
+        )
+        self.assertEqual(
+            (movement.market_direction, movement.confidence_score),
+            ("bearish", 80),
+        )
+        self.assertIn(
+            "Observed market movement: Oil prices fell 2%.",
+            movement.reasoning_details,
+        )
+        for analysis in (metadata, movement):
+            self.assertNotIn("no deterministic directional conclusion", " ".join(analysis.reasoning_details))
 
     def test_chinese_factual_rules_generalize_without_generic_sentiment(self) -> None:
         paraphrase = self.analyst.analyze(

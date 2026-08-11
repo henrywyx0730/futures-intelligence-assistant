@@ -1,36 +1,19 @@
-"""G3B1 enforcement for reviewed Chinese qualified fundamentals."""
+"""G3B2 enforcement for reviewed Chinese conflict and horizon semantics."""
 
 from datetime import datetime, timezone
 import unittest
 
 from futures_intelligence.analyst.commodity_matcher import CommodityMatcher
 from futures_intelligence.analyst.commodity_relevance import CommodityRelevanceResolver
+from futures_intelligence.analyst.fundamental_signal import (
+    ChineseFundamentalSignalDetector,
+)
 from futures_intelligence.analyst.rule_based import RuleBasedAnalyst
 from futures_intelligence.models import MarketInformation
 from tests.chinese_deterministic_analysis_cases import (
     cases_for_phase,
     load_chinese_deterministic_corpus,
 )
-
-
-_QUALIFICATION_REASON_BY_KIND = {
-    "negated_signal": (
-        "Detected a negated fundamental statement; "
-        "no realized factual direction was assigned."
-    ),
-    "uncertain_signal": (
-        "Detected an uncertain fundamental statement; "
-        "no realized factual direction was assigned."
-    ),
-    "conditional_signal": (
-        "Detected a conditional fundamental statement; "
-        "no realized factual direction was assigned."
-    ),
-    "forecast_signal": (
-        "Detected a forecast fundamental statement; "
-        "no realized factual direction was assigned."
-    ),
-}
 
 
 class _CorpusMarketInformation(MarketInformation):
@@ -58,14 +41,15 @@ class _CorpusMarketInformation(MarketInformation):
         raise AttributeError("corpus information is immutable")
 
 
-class ChineseQualifiedAnalysisCorpusTests(unittest.TestCase):
-    """Run the exact active G3B1 subset through the real analysis stack."""
+class ChineseConflictHorizonAnalysisCorpusTests(unittest.TestCase):
+    """Run all active G3B2 cases through the real deterministic analysis stack."""
 
-    def test_all_eleven_qualified_cases_abstain_with_reviewed_semantics(self) -> None:
+    def test_all_five_cases_match_their_conflict_and_horizon_contracts(self) -> None:
         corpus = load_chinese_deterministic_corpus()
-        cases = cases_for_phase(corpus, "g3b1")
+        cases = cases_for_phase(corpus, "g3b2")
         matcher = CommodityMatcher()
         resolver = CommodityRelevanceResolver(matcher=matcher)
+        detector = ChineseFundamentalSignalDetector()
         analyst = RuleBasedAnalyst(
             commodity_matcher=matcher,
             commodity_relevance_resolver=resolver,
@@ -75,46 +59,59 @@ class ChineseQualifiedAnalysisCorpusTests(unittest.TestCase):
             corpus.active_enforcement_phases,
             ("g2", "g3a", "g3b1", "g3b2"),
         )
-        self.assertEqual(len(cases), 11)
+        self.assertEqual(len(cases), 5)
         self.assertEqual(
             tuple(case.id for case in cases),
-            tuple(
-                case.id
-                for case in corpus.cases
-                if case.enforcement.direction == "g3b1"
+            (
+                "crude-oil-clause-local-negation",
+                "crude-oil-supply-demand-conflict",
+                "aluminum-inventory-stock-conflict",
+                "fuel-oil-horizon-conflict",
+                "aluminum-capacity-horizon-conflict",
             ),
         )
+
         for case in cases:
             with self.subTest(case_id=case.id):
                 information = _CorpusMarketInformation(case.title, case.content)
                 relevance = resolver.assess(information)
+                primary_keys = {entry.commodity_key for entry in relevance.primary}
+                primary_matches = tuple(
+                    match
+                    for match in relevance.lexical_matches
+                    if match.commodity_key in primary_keys
+                )
+                detection = detector.detect(
+                    information,
+                    primary_matches,
+                    relevance.lexical_matches,
+                )
                 analysis = analyst.analyze([information])[0]
-                qualification_kind = case.expected.signal_kind
-                if qualification_kind == "conditional_signal" and (
-                    "forecast" in case.scenario_tags
-                    and "conditional" not in case.scenario_tags
-                ):
-                    qualification_kind = "forecast_signal"
 
                 self.assertEqual(information.title, case.title)
                 self.assertEqual(information.content, case.content)
                 self.assertEqual(
-                    tuple(item.commodity_key for item in relevance.primary),
+                    tuple(entry.commodity_key for entry in relevance.primary),
                     case.expected.commodity_keys,
                 )
                 self.assertEqual(relevance.mentioned, ())
+                self.assertEqual(detection.signal_kind, case.expected.signal_kind)
+                actual_reasoning_tags = tuple(
+                    qualification.rule_id
+                    for qualification in detection.qualifications
+                    if qualification.rule_id is not None
+                ) + tuple(signal.rule_id for signal in detection.signals)
+                self.assertEqual(
+                    actual_reasoning_tags,
+                    case.expected.reasoning_tags,
+                )
                 self.assertEqual(
                     analysis.market_direction,
                     case.expected.market_direction,
                 )
-                self.assertEqual(analysis.confidence_score, 60)
-                self.assertIn(
-                    _QUALIFICATION_REASON_BY_KIND[qualification_kind],
-                    analysis.reasoning_details,
-                )
-                self.assertNotIn(
-                    "Detected direct",
-                    " ".join(analysis.reasoning_details),
+                self.assertEqual(
+                    analysis.confidence_score,
+                    75 if case.id == "crude-oil-clause-local-negation" else 60,
                 )
                 self.assertIs(analysis.market_information, information)
 
