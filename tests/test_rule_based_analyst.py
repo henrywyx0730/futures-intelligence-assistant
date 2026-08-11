@@ -779,6 +779,192 @@ class RuleBasedAnalystTests(unittest.TestCase):
                 self.assertEqual(analysis.market_direction, "neutral")
                 self.assertNotIn("Detected direct", " ".join(analysis.reasoning_details))
 
+    def test_chinese_qualified_fundamentals_preserve_direct_minimal_pairs(self) -> None:
+        qualified_cases = (
+            (
+                "negated",
+                "原油供应并未收紧。",
+                "Detected a negated fundamental statement; "
+                "no realized factual direction was assigned.",
+            ),
+            (
+                "uncertain",
+                "原油供应可能收紧。",
+                "Detected an uncertain fundamental statement; "
+                "no realized factual direction was assigned.",
+            ),
+            (
+                "conditional",
+                "若原油供应收紧。",
+                "Detected a conditional fundamental statement; "
+                "no realized factual direction was assigned.",
+            ),
+            (
+                "forecast",
+                "预计原油供应收紧。",
+                "Detected a forecast fundamental statement; "
+                "no realized factual direction was assigned.",
+            ),
+        )
+
+        for qualification_kind, qualified_title, expected_reasoning in qualified_cases:
+            with self.subTest(qualification_kind=qualification_kind):
+                direct, qualified = self.analyst.analyze(
+                    [
+                        make_information(
+                            "原油供应收紧。",
+                            "Market context.",
+                            source_type="research_report",
+                        ),
+                        make_information(
+                            qualified_title,
+                            "Market context.",
+                            source_type="research_report",
+                        ),
+                    ]
+                )
+
+                self.assertEqual(
+                    (direct.market_direction, direct.confidence_score),
+                    ("bullish", 75),
+                )
+                self.assertEqual(
+                    (qualified.market_direction, qualified.confidence_score),
+                    ("neutral", 60),
+                )
+                self.assertIn(expected_reasoning, qualified.reasoning_details)
+                self.assertNotIn(
+                    "Detected direct supply tightening for Crude Oil.",
+                    qualified.reasoning_details,
+                )
+
+    def test_chinese_standalone_jiang_keeps_direct_factual_semantics(self) -> None:
+        direct, forecast = self.analyst.analyze(
+            [
+                make_information(
+                    "原油将库存数据纳入跟踪，供应收紧。",
+                    "Market context.",
+                    source_type="research_report",
+                ),
+                make_information(
+                    "预计原油供应收紧。",
+                    "Market context.",
+                    source_type="research_report",
+                ),
+            ]
+        )
+
+        self.assertEqual(
+            (direct.market_direction, direct.confidence_score),
+            ("bullish", 75),
+        )
+        self.assertIn(
+            "Detected direct supply tightening for Crude Oil.",
+            direct.reasoning_details,
+        )
+        self.assertNotIn("forecast fundamental statement", " ".join(direct.reasoning_details))
+        self.assertEqual(
+            (forecast.market_direction, forecast.confidence_score),
+            ("neutral", 60),
+        )
+        self.assertIn(
+            "Detected a forecast fundamental statement; "
+            "no realized factual direction was assigned.",
+            forecast.reasoning_details,
+        )
+
+    def test_chinese_qualification_is_clause_and_field_local(self) -> None:
+        clause_local, title_qualified, content_qualified = self.analyst.analyze(
+            [
+                make_information(
+                    "原油专题",
+                    "原油供应可能增加。原油供应收紧。",
+                    source_type="research_report",
+                ),
+                make_information(
+                    "原油供应可能增加。",
+                    "原油供应收紧。",
+                    source_type="research_report",
+                ),
+                make_information(
+                    "原油供应收紧。",
+                    "原油供应可能增加。",
+                    source_type="research_report",
+                ),
+            ]
+        )
+
+        for analysis in (clause_local, title_qualified, content_qualified):
+            self.assertEqual(
+                (analysis.market_direction, analysis.confidence_score),
+                ("bullish", 75),
+            )
+            self.assertIn(
+                "Detected direct supply tightening for Crude Oil.",
+                analysis.reasoning_details,
+            )
+
+    def test_chinese_qualification_preserves_primary_mentioned_scope(self) -> None:
+        information = make_information(
+            "原油专题",
+            "燃料油可能供应收紧。",
+            source_type="research_report",
+        )
+        relevance = CommodityRelevanceResolver().assess(information)
+        analysis = self.analyst.analyze([information])[0]
+
+        self.assertEqual(
+            tuple(item.commodity_key for item in relevance.primary),
+            ("crude_oil",),
+        )
+        self.assertEqual(
+            tuple(item.commodity_key for item in relevance.mentioned),
+            ("fuel_oil",),
+        )
+        self.assertEqual(
+            (analysis.market_direction, analysis.confidence_score),
+            ("neutral", 60),
+        )
+        self.assertNotIn("fundamental statement", " ".join(analysis.reasoning_details))
+        self.assertNotIn("Detected direct", " ".join(analysis.reasoning_details))
+
+    def test_chinese_qualification_preserves_metadata_and_movement_priorities(
+        self,
+    ) -> None:
+        metadata, movement = self.analyst.analyze(
+            [
+                make_information(
+                    "原油供应可能收紧。",
+                    "Market context.",
+                    source_type="research_report",
+                    metadata={"price_change": -2.0},
+                ),
+                make_information(
+                    "原油供应可能收紧。",
+                    "Oil prices fell 2%.",
+                    source_type="research_report",
+                ),
+            ]
+        )
+
+        self.assertEqual(metadata.market_direction, "bearish")
+        self.assertEqual(metadata.confidence_score, 80)
+        self.assertIn(
+            "Structured price change is negative (-2.0).",
+            metadata.reasoning_details,
+        )
+        self.assertEqual(movement.market_direction, "bearish")
+        self.assertEqual(movement.confidence_score, 80)
+        self.assertIn(
+            "Observed market movement: Oil prices fell 2%.",
+            movement.reasoning_details,
+        )
+        for analysis in (metadata, movement):
+            self.assertNotIn(
+                "fundamental statement",
+                " ".join(analysis.reasoning_details),
+            )
+
     def test_chinese_factual_rules_generalize_without_generic_sentiment(self) -> None:
         paraphrase = self.analyst.analyze(
             [

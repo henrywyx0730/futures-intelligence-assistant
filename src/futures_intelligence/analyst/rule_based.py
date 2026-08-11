@@ -11,6 +11,7 @@ from futures_intelligence.analyst.commodity_matcher import (
 from futures_intelligence.analyst.commodity_relevance import CommodityRelevanceResolver
 from futures_intelligence.analyst.fundamental_signal import (
     ChineseFundamentalSignalDetector,
+    FundamentalQualification,
     FundamentalSignal,
 )
 from futures_intelligence.analyst.market_movement import (
@@ -99,17 +100,20 @@ class RuleBasedAnalyst(BaseAnalyst):
             )
             commodities = _commodity_labels(primary_matches)
             mentioned_commodities = _commodity_labels(mentioned_matches)
-            fundamental_signals = self._fundamental_signal_detector.detect(
+            fundamental_detection = self._fundamental_signal_detector.detect(
                 item,
                 primary_matches,
                 commodity_matches,
             )
+            fundamental_signals = fundamental_detection.signals
+            fundamental_qualifications = fundamental_detection.qualifications
             summary = _research_report_summary(commodities)
         else:
             commodity_matches = self._commodity_matcher.match(item)
             commodities = _commodity_labels(commodity_matches)
             mentioned_commodities = ()
             fundamental_signals = ()
+            fundamental_qualifications = ()
             summary = _summary_for_commodities(commodities)
         market_direction, directional_details, directional_confidence = (
             _directional_signals(
@@ -118,6 +122,7 @@ class RuleBasedAnalyst(BaseAnalyst):
                 commodities,
                 self._market_movement_detector.detect(item, commodity_matches),
                 fundamental_signals,
+                fundamental_qualifications,
             )
         )
         reasoning_details = [
@@ -189,6 +194,7 @@ def _directional_signals(
     detected_commodities: tuple[str, ...],
     movement_signal: MarketMovementSignal,
     fundamental_signals: tuple[FundamentalSignal, ...],
+    fundamental_qualifications: tuple[FundamentalQualification, ...],
 ) -> tuple[str, tuple[str, ...], int]:
     """Determine direction from structured quote data or deterministic text terms."""
     price_change = item.metadata.get("price_change")
@@ -286,6 +292,17 @@ def _directional_signals(
             "neutral",
             ("Conflicting bullish and bearish deterministic signals were detected.",),
             confidence,
+        )
+    if fundamental_qualifications:
+        return (
+            "neutral",
+            tuple(
+                dict.fromkeys(
+                    qualification.reasoning
+                    for qualification in fundamental_qualifications
+                )
+            ),
+            0,
         )
     return (
         "neutral",

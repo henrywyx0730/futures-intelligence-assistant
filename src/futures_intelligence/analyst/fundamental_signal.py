@@ -25,6 +25,24 @@ class FundamentalSignal:
 
 
 @dataclass(frozen=True)
+class FundamentalQualification:
+    """One immutable qualification observation without directional force."""
+
+    commodity_key: str
+    commodity_label: str
+    qualification_kind: str
+    reasoning: str
+
+
+@dataclass(frozen=True)
+class FundamentalDetection:
+    """Direct signals and non-directional qualifications from one item."""
+
+    signals: tuple[FundamentalSignal, ...] = ()
+    qualifications: tuple[FundamentalQualification, ...] = ()
+
+
+@dataclass(frozen=True)
 class _FundamentalRule:
     """One reviewed commodity-specific Chinese factual relationship."""
 
@@ -136,25 +154,61 @@ _RULES = (
 )
 
 _CLAUSE_SEPARATOR = re.compile(r"[。！？!?；;\n]+")
-_QUALIFIED_MARKERS = (
+_NEGATION_MARKERS = (
     "并未",
     "没有",
     "尚未",
-    "未兑现",
+)
+_UNCERTAINTY_MARKERS = (
     "不明确",
     "不排除",
+    "可能",
+)
+_CONDITIONAL_MARKERS = (
     "若",
     "如果",
     "一旦",
-    "可能",
+)
+_FORECAST_MARKERS = (
     "有望",
     "预计",
     "预期",
-    "将",
+)
+_DEFERRED_DISCOURSE_MARKERS = (
     "但",
     "不过",
     "然而",
 )
+_QUALIFIED_PROPOSITIONS = (
+    ("供应", "收紧"),
+    ("库存", "下降"),
+    ("需求", "改善"),
+    ("减产", "兑现"),
+    ("成本", "支撑"),
+    ("需求", "走弱"),
+    ("进口", "下降"),
+    ("需求", "恢复"),
+    ("库存", "去化"),
+)
+_MAX_PROPOSITION_GAP = 8
+_QUALIFICATION_REASONING = {
+    "negated": (
+        "Detected a negated fundamental statement; "
+        "no realized factual direction was assigned."
+    ),
+    "uncertain": (
+        "Detected an uncertain fundamental statement; "
+        "no realized factual direction was assigned."
+    ),
+    "conditional": (
+        "Detected a conditional fundamental statement; "
+        "no realized factual direction was assigned."
+    ),
+    "forecast": (
+        "Detected a forecast fundamental statement; "
+        "no realized factual direction was assigned."
+    ),
+}
 
 
 class ChineseFundamentalSignalDetector:
@@ -165,22 +219,51 @@ class ChineseFundamentalSignalDetector:
         information: MarketInformation,
         eligible_primary_matches: tuple[CommodityMatch, ...],
         lexical_matches: tuple[CommodityMatch, ...],
-    ) -> tuple[FundamentalSignal, ...]:
-        """Return stable, deduplicated signals attributed to primary commodities."""
+    ) -> FundamentalDetection:
+        """Return stable direct signals and non-directional qualifications."""
         if information.source_type != "research_report" or not eligible_primary_matches:
-            return ()
+            return FundamentalDetection()
 
         signals: list[FundamentalSignal] = []
+        qualifications: list[FundamentalQualification] = []
         seen_rule_ids: set[str] = set()
+        seen_qualifications: set[tuple[str, str]] = set()
         for field_text in (information.title, information.content):
             for clause in _CLAUSE_SEPARATOR.split(field_text):
-                if not clause or _is_qualified(clause):
+                if not clause:
                     continue
                 attributed_matches = _attributed_matches(
                     clause,
                     eligible_primary_matches,
                     lexical_matches,
                 )
+                if not attributed_matches:
+                    continue
+                qualification_kind = _qualification_kind(clause)
+                if qualification_kind is not None and _contains_qualified_proposition(
+                    clause
+                ):
+                    for match in attributed_matches:
+                        qualification_key = (
+                            match.commodity_key,
+                            qualification_kind,
+                        )
+                        if qualification_key in seen_qualifications:
+                            continue
+                        qualifications.append(
+                            FundamentalQualification(
+                                commodity_key=match.commodity_key,
+                                commodity_label=match.commodity_label,
+                                qualification_kind=qualification_kind,
+                                reasoning=_QUALIFICATION_REASONING[
+                                    qualification_kind
+                                ],
+                            )
+                        )
+                        seen_qualifications.add(qualification_key)
+                    continue
+                if _contains_deferred_discourse(clause):
+                    continue
                 for match in attributed_matches:
                     for rule in _RULES:
                         if (
@@ -200,12 +283,49 @@ class ChineseFundamentalSignalDetector:
                             )
                         )
                         seen_rule_ids.add(rule.rule_id)
-        return tuple(signals)
+        return FundamentalDetection(
+            signals=tuple(signals),
+            qualifications=tuple(qualifications),
+        )
 
 
-def _is_qualified(clause: str) -> bool:
-    """Reject clauses that visibly require later G3B semantics."""
-    return any(marker in clause for marker in _QUALIFIED_MARKERS)
+def _qualification_kind(clause: str) -> str | None:
+    """Classify only reviewed qualification markers in stable precedence."""
+    if any(marker in clause for marker in _CONDITIONAL_MARKERS):
+        return "conditional"
+    if "预期未兑现" in clause:
+        return "uncertain"
+    if any(marker in clause for marker in _NEGATION_MARKERS):
+        return "negated"
+    if any(marker in clause for marker in _UNCERTAINTY_MARKERS):
+        return "uncertain"
+    if any(marker in clause for marker in _FORECAST_MARKERS):
+        return "forecast"
+    return None
+
+
+def _contains_deferred_discourse(clause: str) -> bool:
+    """Keep mixed-clause discourse semantics deferred to G3B2."""
+    return any(marker in clause for marker in _DEFERRED_DISCOURSE_MARKERS)
+
+
+def _contains_qualified_proposition(clause: str) -> bool:
+    """Recognize only reviewed subject-predicate shapes with a bounded gap."""
+    for subject, predicate in _QUALIFIED_PROPOSITIONS:
+        subject_start = clause.find(subject)
+        while subject_start >= 0:
+            predicate_start = clause.find(
+                predicate,
+                subject_start + len(subject),
+            )
+            if (
+                predicate_start >= 0
+                and predicate_start - (subject_start + len(subject))
+                <= _MAX_PROPOSITION_GAP
+            ):
+                return True
+            subject_start = clause.find(subject, subject_start + 1)
+    return False
 
 
 def _attributed_matches(

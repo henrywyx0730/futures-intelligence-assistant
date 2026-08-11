@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "active_enforcement_phases": ["g2", "g3a"],
+  "active_enforcement_phases": ["g2", "g3a", "g3b1"],
   "cases": [
     {
       "id": "live-hog-basic-identity",
@@ -289,7 +289,7 @@
       "provenance": "synthetic_original",
       "scenario_tags": ["negation", "supply", "petroleum", "energy", "neutral"],
       "expected": {"commodity_keys": ["crude_oil"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["supply_tightening_negated"], "signal_kind": "negated_signal"},
-      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "enforcement": {"commodity": "g2", "direction": "g3b1", "relative_value": "not_applicable"},
       "notes": "Direct negation suppresses, rather than reverses, tightening."
     },
     {
@@ -299,7 +299,7 @@
       "provenance": "synthetic_original",
       "scenario_tags": ["negation", "inventory", "petroleum", "energy", "neutral"],
       "expected": {"commodity_keys": ["fuel_oil"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["inventory_decline_negated"], "signal_kind": "negated_signal"},
-      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "enforcement": {"commodity": "g2", "direction": "g3b1", "relative_value": "not_applicable"},
       "notes": "Negated inventory decline has no automatic opposite direction."
     },
     {
@@ -309,7 +309,7 @@
       "provenance": "synthetic_original",
       "scenario_tags": ["negation", "demand", "live_hog", "agriculture", "neutral"],
       "expected": {"commodity_keys": ["live_hog"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["demand_improvement_negated"], "signal_kind": "negated_signal"},
-      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "enforcement": {"commodity": "g2", "direction": "g3b1", "relative_value": "not_applicable"},
       "notes": "Unrealized demand improvement remains neutral."
     },
     {
@@ -319,7 +319,7 @@
       "provenance": "synthetic_original",
       "scenario_tags": ["uncertainty", "supply", "aluminum", "metals", "neutral"],
       "expected": {"commodity_keys": ["aluminum"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["production_cut_unfulfilled"], "signal_kind": "uncertain_signal"},
-      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "enforcement": {"commodity": "g2", "direction": "g3b1", "relative_value": "not_applicable"},
       "notes": "An unfulfilled expectation is not observed supply tightening."
     },
     {
@@ -329,7 +329,7 @@
       "provenance": "synthetic_original",
       "scenario_tags": ["negation", "cost", "aluminum", "metals", "neutral"],
       "expected": {"commodity_keys": ["aluminum"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["cost_support_negated"], "signal_kind": "negated_signal"},
-      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "enforcement": {"commodity": "g2", "direction": "g3b1", "relative_value": "not_applicable"},
       "notes": "Negated support does not itself prove a bearish outcome."
     },
     {
@@ -339,7 +339,7 @@
       "provenance": "synthetic_original",
       "scenario_tags": ["uncertainty", "inventory", "agriculture", "neutral"],
       "expected": {"commodity_keys": ["corn"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["inventory_decline_uncertain"], "signal_kind": "uncertain_signal"},
-      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "enforcement": {"commodity": "g2", "direction": "g3b1", "relative_value": "not_applicable"},
       "notes": "Uncertain inventory direction is not deterministic evidence."
     },
     {
@@ -349,7 +349,7 @@
       "provenance": "synthetic_original",
       "scenario_tags": ["negation", "demand", "supply", "petroleum", "energy", "bullish"],
       "expected": {"commodity_keys": ["crude_oil"], "no_commodity_keys": [], "market_direction": "bullish", "reasoning_tags": ["supply_tightening_negated", "demand_improvement"], "signal_kind": "negated_signal"},
-      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "enforcement": {"commodity": "g2", "direction": "g3b2", "relative_value": "not_applicable"},
       "notes": "Negation is local and does not erase separate demand evidence."
     },
     {
@@ -359,7 +359,7 @@
       "provenance": "synthetic_original",
       "scenario_tags": ["uncertainty", "conditional", "demand", "agriculture", "neutral"],
       "expected": {"commodity_keys": ["wheat"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["demand_weakness_possible"], "signal_kind": "uncertain_signal"},
-      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "enforcement": {"commodity": "g2", "direction": "g3b1", "relative_value": "not_applicable"},
       "notes": "Possibility language is not an observed bearish fact."
     },
     {
@@ -369,7 +369,7 @@
       "provenance": "synthetic_original",
       "scenario_tags": ["conditional", "forecast", "supply", "petroleum", "energy", "neutral"],
       "expected": {"commodity_keys": ["crude_oil"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["production_cut_conditional"], "signal_kind": "conditional_signal"},
-      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "enforcement": {"commodity": "g2", "direction": "g3b1", "relative_value": "not_applicable"},
       "notes": "Conditional production cuts do not equal observed support."
     },
     {
@@ -379,7 +379,7 @@
       "provenance": "synthetic_original",
       "scenario_tags": ["conditional", "forecast", "supply", "petroleum", "energy", "neutral"],
       "expected": {"commodity_keys": ["fuel_oil"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["import_decline_conditional"], "signal_kind": "conditional_signal"},
-      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "enforcement": {"commodity": "g2", "direction": "g3b1", "relative_value": "not_applicable"},
       "notes": "Conditional import changes have no outright direction."
     },
     {
@@ -389,7 +389,7 @@
       "provenance": "synthetic_original",
       "scenario_tags": ["conditional", "forecast", "demand", "inventory", "live_hog", "agriculture", "neutral"],
       "expected": {"commodity_keys": ["live_hog"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["demand_recovery_conditional"], "signal_kind": "conditional_signal"},
-      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "enforcement": {"commodity": "g2", "direction": "g3b1", "relative_value": "not_applicable"},
       "notes": "Conditional demand recovery is a scenario, not a fact."
     },
     {
@@ -399,7 +399,7 @@
       "provenance": "synthetic_original",
       "scenario_tags": ["forecast", "inventory", "aluminum", "metals", "neutral"],
       "expected": {"commodity_keys": ["aluminum"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["inventory_decline_forecast"], "signal_kind": "conditional_signal"},
-      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "enforcement": {"commodity": "g2", "direction": "g3b1", "relative_value": "not_applicable"},
       "notes": "Forecast inventory decline remains qualified."
     },
     {
@@ -409,7 +409,7 @@
       "provenance": "synthetic_original",
       "scenario_tags": ["conflict", "supply", "demand", "petroleum", "energy", "neutral"],
       "expected": {"commodity_keys": ["crude_oil"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["supply_tightening", "demand_weakness"], "signal_kind": "conflicting_signals"},
-      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "enforcement": {"commodity": "g2", "direction": "g3b2", "relative_value": "not_applicable"},
       "notes": "Opposing factual fundamentals remain neutral in one-direction output."
     },
     {
@@ -419,7 +419,7 @@
       "provenance": "synthetic_original",
       "scenario_tags": ["conflict", "inventory", "aluminum", "metals", "neutral"],
       "expected": {"commodity_keys": ["aluminum"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["inventory_destock", "high_inventory_constraint"], "signal_kind": "conflicting_signals"},
-      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "enforcement": {"commodity": "g2", "direction": "g3b2", "relative_value": "not_applicable"},
       "notes": "Destocking and high stock are explicit competing evidence."
     },
     {
@@ -429,7 +429,7 @@
       "provenance": "synthetic_original",
       "scenario_tags": ["horizon", "petroleum", "energy", "neutral"],
       "expected": {"commodity_keys": ["fuel_oil"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["short_term_strength", "medium_long_term_pressure"], "signal_kind": "horizon_conflict"},
-      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "enforcement": {"commodity": "g2", "direction": "g3b2", "relative_value": "not_applicable"},
       "notes": "Opposing horizons cannot collapse into one outright direction."
     },
     {
@@ -439,7 +439,7 @@
       "provenance": "synthetic_original",
       "scenario_tags": ["horizon", "supply", "aluminum", "metals", "neutral"],
       "expected": {"commodity_keys": ["aluminum"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["current_supply_tightness", "future_capacity_recovery"], "signal_kind": "horizon_conflict"},
-      "enforcement": {"commodity": "g2", "direction": "g3b", "relative_value": "not_applicable"},
+      "enforcement": {"commodity": "g2", "direction": "g3b2", "relative_value": "not_applicable"},
       "notes": "Current and future supply statements conflict by horizon."
     },
     {

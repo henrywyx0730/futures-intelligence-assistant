@@ -1,4 +1,4 @@
-"""G3A enforcement for reviewed direct Chinese factual fundamentals."""
+"""G3B1 enforcement for reviewed Chinese qualified fundamentals."""
 
 from datetime import datetime, timezone
 import unittest
@@ -13,19 +13,23 @@ from tests.chinese_deterministic_analysis_cases import (
 )
 
 
-_REASONING_BY_TAG = {
-    "supply_tightening": "Detected direct supply tightening for Crude Oil.",
-    "supply_reduction": "Detected direct supply reduction for Fuel Oil.",
-    "inventory_decline": "Detected direct inventory decline for Live Hog.",
-    "inventory_destock": "Detected direct inventory destocking for Aluminum.",
-    "demand_improvement": "Detected direct demand improvement for Wheat.",
-    "cost_support": "Detected direct cost support strengthening for Corn.",
-    "supply_increase": "Detected direct supply increase for Crude Oil.",
-    "supply_loose": "Detected direct loose supply for Fuel Oil.",
-    "inventory_accumulation": "Detected direct inventory accumulation for Live Hog.",
-    "inventory_increase": "Detected direct inventory increase for Aluminum.",
-    "demand_weakness": "Detected direct demand weakness for Soybean Meal.",
-    "cost_decline": "Detected direct cost decline for Corn.",
+_QUALIFICATION_REASON_BY_KIND = {
+    "negated_signal": (
+        "Detected a negated fundamental statement; "
+        "no realized factual direction was assigned."
+    ),
+    "uncertain_signal": (
+        "Detected an uncertain fundamental statement; "
+        "no realized factual direction was assigned."
+    ),
+    "conditional_signal": (
+        "Detected a conditional fundamental statement; "
+        "no realized factual direction was assigned."
+    ),
+    "forecast_signal": (
+        "Detected a forecast fundamental statement; "
+        "no realized factual direction was assigned."
+    ),
 }
 
 
@@ -39,7 +43,7 @@ class _CorpusMarketInformation(MarketInformation):
         object.__setattr__(
             self,
             "published_time",
-            datetime(2026, 8, 10, tzinfo=timezone.utc),
+            datetime(2026, 8, 11, tzinfo=timezone.utc),
         )
         object.__setattr__(self, "content", content)
         object.__setattr__(self, "category", ())
@@ -54,12 +58,12 @@ class _CorpusMarketInformation(MarketInformation):
         raise AttributeError("corpus information is immutable")
 
 
-class ChineseFactualAnalysisCorpusTests(unittest.TestCase):
-    """Run all active G3A cases through real matcher, relevance, and analysis."""
+class ChineseQualifiedAnalysisCorpusTests(unittest.TestCase):
+    """Run the exact active G3B1 subset through the real analysis stack."""
 
-    def test_all_twelve_factual_cases_match_their_direction_contracts(self) -> None:
+    def test_all_eleven_qualified_cases_abstain_with_reviewed_semantics(self) -> None:
         corpus = load_chinese_deterministic_corpus()
-        cases = cases_for_phase(corpus, "g3a")
+        cases = cases_for_phase(corpus, "g3b1")
         matcher = CommodityMatcher()
         resolver = CommodityRelevanceResolver(matcher=matcher)
         analyst = RuleBasedAnalyst(
@@ -71,41 +75,47 @@ class ChineseFactualAnalysisCorpusTests(unittest.TestCase):
             corpus.active_enforcement_phases,
             ("g2", "g3a", "g3b1"),
         )
-        self.assertEqual(len(cases), 12)
+        self.assertEqual(len(cases), 11)
         self.assertEqual(
             tuple(case.id for case in cases),
             tuple(
                 case.id
                 for case in corpus.cases
-                if case.enforcement.direction == "g3a"
+                if case.enforcement.direction == "g3b1"
             ),
         )
         for case in cases:
             with self.subTest(case_id=case.id):
                 information = _CorpusMarketInformation(case.title, case.content)
-                self.assertEqual(information.title, case.title)
-                self.assertEqual(information.content, case.content)
-
                 relevance = resolver.assess(information)
                 analysis = analyst.analyze([information])[0]
+                qualification_kind = case.expected.signal_kind
+                if qualification_kind == "conditional_signal" and (
+                    "forecast" in case.scenario_tags
+                    and "conditional" not in case.scenario_tags
+                ):
+                    qualification_kind = "forecast_signal"
 
-                self.assertEqual(
-                    tuple(match.commodity_key for match in relevance.lexical_matches),
-                    case.expected.commodity_keys,
-                )
+                self.assertEqual(information.title, case.title)
+                self.assertEqual(information.content, case.content)
                 self.assertEqual(
                     tuple(item.commodity_key for item in relevance.primary),
                     case.expected.commodity_keys,
                 )
                 self.assertEqual(relevance.mentioned, ())
-                self.assertEqual(analysis.market_direction, case.expected.market_direction)
-                self.assertEqual(case.expected.signal_kind, "fundamental_fact")
-                self.assertEqual(len(case.expected.reasoning_tags), 1)
+                self.assertEqual(
+                    analysis.market_direction,
+                    case.expected.market_direction,
+                )
+                self.assertEqual(analysis.confidence_score, 60)
                 self.assertIn(
-                    _REASONING_BY_TAG[case.expected.reasoning_tags[0]],
+                    _QUALIFICATION_REASON_BY_KIND[qualification_kind],
                     analysis.reasoning_details,
                 )
-                self.assertEqual(analysis.confidence_score, 75)
+                self.assertNotIn(
+                    "Detected direct",
+                    " ".join(analysis.reasoning_details),
+                )
                 self.assertIs(analysis.market_information, information)
 
 

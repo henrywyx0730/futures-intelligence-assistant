@@ -29,15 +29,20 @@ class ChineseDeterministicAnalysisCorpusTests(unittest.TestCase):
     def setUp(self) -> None:
         self.corpus = load_chinese_deterministic_corpus()
 
-    def test_fixture_loads_with_g2_and_g3a_enforcement_only(self) -> None:
-        """Activate commodity identity and direct factual direction only."""
+    def test_fixture_loads_with_g3b1_qualification_enforcement(self) -> None:
+        """Activate reviewed qualification semantics without G3b2 or G4."""
         self.assertTrue(FIXTURE_PATH.is_file())
         self.assertEqual(self.corpus.schema_version, 1)
-        self.assertEqual(self.corpus.active_enforcement_phases, ("g2", "g3a"))
-        self.assertNotIn("g3b", self.corpus.active_enforcement_phases)
+        self.assertEqual(
+            self.corpus.active_enforcement_phases,
+            ("g2", "g3a", "g3b1"),
+        )
+        self.assertNotIn("g3b2", self.corpus.active_enforcement_phases)
         self.assertNotIn("g4", self.corpus.active_enforcement_phases)
         self.assertEqual(len(cases_for_phase(self.corpus, "g2")), 55)
         self.assertEqual(len(cases_for_phase(self.corpus, "g3a")), 12)
+        self.assertEqual(len(cases_for_phase(self.corpus, "g3b1")), 11)
+        self.assertEqual(len(cases_for_phase(self.corpus, "g3b2")), 5)
 
     def test_has_exact_case_count_and_primary_category_distribution(self) -> None:
         """Keep the initial corpus deliberately small and reviewable."""
@@ -229,6 +234,27 @@ class ChineseDeterministicAnalysisCorpusTests(unittest.TestCase):
                 malformed_payload = copy.deepcopy(payload)
                 mutate(malformed_payload)
                 with self.assertRaises(ValueError):
+                    _parse_corpus_payload(malformed_payload)
+
+    def test_loader_rejects_g3b2_cases_relabelled_as_g3b1(self) -> None:
+        """Keep conflict and horizon semantics out of the qualification-only phase."""
+        payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+
+        for case_id in (
+            "crude-oil-supply-demand-conflict",
+            "fuel-oil-horizon-conflict",
+        ):
+            with self.subTest(case_id=case_id):
+                malformed_payload = copy.deepcopy(payload)
+                case = next(
+                    item
+                    for item in malformed_payload["cases"]
+                    if item["id"] == case_id
+                )
+                case["expected"]["signal_kind"] = "conditional_signal"
+                case["enforcement"]["direction"] = "g3b1"
+
+                with self.assertRaisesRegex(ValueError, "G3B2 semantic"):
                     _parse_corpus_payload(malformed_payload)
 
     def test_loader_rejects_duplicate_json_keys(self) -> None:

@@ -18,7 +18,7 @@ FIXTURE_PATH = (
 
 VALID_DIRECTIONS = frozenset({"bullish", "bearish", "neutral"})
 ALLOWED_ENFORCEMENT_PHASES = frozenset(
-    {"g2", "g3a", "g3b", "g4", "not_applicable"}
+    {"g2", "g3a", "g3b1", "g3b2", "g4", "not_applicable"}
 )
 ALLOWED_SCENARIO_TAGS = frozenset(
     {
@@ -247,7 +247,12 @@ def _parse_case(raw_case: object, index: int) -> ChineseDeterministicAnalysisCas
     _validate_no_source_text((title, content, notes), location)
     primary_category = _primary_category(scenario_tags, location)
     _validate_phase_assignment(
-        primary_category, expected, enforcement, location, case_id
+        primary_category,
+        scenario_tags,
+        expected,
+        enforcement,
+        location,
+        case_id,
     )
     return ChineseDeterministicAnalysisCase(
         case_id,
@@ -407,12 +412,16 @@ def _primary_category(tags: tuple[str, ...], location: str) -> str:
 
 def _validate_phase_assignment(
     primary_category: str,
+    scenario_tags: tuple[str, ...],
     expected: ExpectedOutcome,
     enforcement: EnforcementPlan,
     location: str,
     case_id: str,
 ) -> None:
     """Keep expected behavior and its planned activation phase internally consistent."""
+    if {"conflict", "horizon"} & set(scenario_tags):
+        if enforcement.direction != "g3b2":
+            raise ValueError(f"case {case_id}: G3B2 semantic cases must target g3b2")
     if primary_category == "relative_value":
         if (
             expected.market_direction != "neutral"
@@ -440,12 +449,15 @@ def _validate_phase_assignment(
     if primary_category == "negation_or_uncertainty":
         if expected.signal_kind not in {"negated_signal", "uncertain_signal"}:
             raise ValueError(f"case {case_id}: qualified case has an invalid signal kind")
+        expected_phase = "g3b1" if expected.market_direction == "neutral" else "g3b2"
         if (
             enforcement.commodity != "g2"
-            or enforcement.direction != "g3b"
+            or enforcement.direction != expected_phase
             or enforcement.relative_value != "not_applicable"
         ):
-            raise ValueError(f"case {case_id}: qualified case must target G2 and G3b")
+            raise ValueError(
+                f"case {case_id}: qualified case has an inconsistent G3b phase"
+            )
         return
     if primary_category == "qualified_or_conflicting":
         if expected.signal_kind not in {
@@ -454,12 +466,17 @@ def _validate_phase_assignment(
             "horizon_conflict",
         }:
             raise ValueError(f"case {case_id}: qualified case has an invalid signal kind")
+        expected_phase = (
+            "g3b1" if expected.signal_kind == "conditional_signal" else "g3b2"
+        )
         if (
             enforcement.commodity != "g2"
-            or enforcement.direction != "g3b"
+            or enforcement.direction != expected_phase
             or enforcement.relative_value != "not_applicable"
         ):
-            raise ValueError(f"case {case_id}: qualified case must target G2 and G3b")
+            raise ValueError(
+                f"case {case_id}: qualified case has an inconsistent G3b phase"
+            )
         return
     if primary_category == "commodity_identity":
         if expected.market_direction != "neutral":
