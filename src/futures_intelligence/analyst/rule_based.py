@@ -21,6 +21,7 @@ from futures_intelligence.analyst.market_movement import (
     MarketMovementDetector,
     MarketMovementSignal,
 )
+from futures_intelligence.analyst.relative_value import RelativeValueDetector
 from futures_intelligence.models import MarketAnalysis, MarketInformation
 
 BULLISH_KEYWORDS = (
@@ -80,6 +81,7 @@ class RuleBasedAnalyst(BaseAnalyst):
         )
         self._market_movement_detector = MarketMovementDetector()
         self._fundamental_signal_detector = ChineseFundamentalSignalDetector()
+        self._relative_value_detector = RelativeValueDetector()
 
     def analyze(self, information: list[MarketInformation]) -> list[MarketAnalysis]:
         """Return one deterministic analysis for each information item."""
@@ -109,6 +111,11 @@ class RuleBasedAnalyst(BaseAnalyst):
             fundamental_signals = fundamental_detection.signals
             fundamental_qualifications = fundamental_detection.qualifications
             fundamental_conflicts = fundamental_detection.conflicts
+            relative_value_observations = self._relative_value_detector.detect(
+                item,
+                primary_matches,
+                commodity_matches,
+            ).observations
             summary = _research_report_summary(commodities)
         else:
             commodity_matches = self._commodity_matcher.match(item)
@@ -117,6 +124,7 @@ class RuleBasedAnalyst(BaseAnalyst):
             fundamental_signals = ()
             fundamental_qualifications = ()
             fundamental_conflicts = ()
+            relative_value_observations = ()
             summary = _summary_for_commodities(commodities)
         market_direction, directional_details, directional_confidence = (
             _directional_signals(
@@ -148,6 +156,9 @@ class RuleBasedAnalyst(BaseAnalyst):
                 f"Detected commodity keywords: {', '.join(commodities)}."
             )
         reasoning_details.extend(directional_details)
+        reasoning_details.extend(
+            observation.reasoning for observation in relative_value_observations
+        )
 
         confidence_score = min(
             95,

@@ -1,32 +1,17 @@
-"""G3A enforcement for reviewed direct Chinese factual fundamentals."""
+"""G4 enforcement for reviewed Chinese relative-value semantics."""
 
 from datetime import datetime, timezone
 import unittest
 
 from futures_intelligence.analyst.commodity_matcher import CommodityMatcher
 from futures_intelligence.analyst.commodity_relevance import CommodityRelevanceResolver
+from futures_intelligence.analyst.relative_value import RelativeValueDetector
 from futures_intelligence.analyst.rule_based import RuleBasedAnalyst
 from futures_intelligence.models import MarketInformation
 from tests.chinese_deterministic_analysis_cases import (
     cases_for_phase,
     load_chinese_deterministic_corpus,
 )
-
-
-_REASONING_BY_TAG = {
-    "supply_tightening": "Detected direct supply tightening for Crude Oil.",
-    "supply_reduction": "Detected direct supply reduction for Fuel Oil.",
-    "inventory_decline": "Detected direct inventory decline for Live Hog.",
-    "inventory_destock": "Detected direct inventory destocking for Aluminum.",
-    "demand_improvement": "Detected direct demand improvement for Wheat.",
-    "cost_support": "Detected direct cost support strengthening for Corn.",
-    "supply_increase": "Detected direct supply increase for Crude Oil.",
-    "supply_loose": "Detected direct loose supply for Fuel Oil.",
-    "inventory_accumulation": "Detected direct inventory accumulation for Live Hog.",
-    "inventory_increase": "Detected direct inventory increase for Aluminum.",
-    "demand_weakness": "Detected direct demand weakness for Soybean Meal.",
-    "cost_decline": "Detected direct cost decline for Corn.",
-}
 
 
 class _CorpusMarketInformation(MarketInformation):
@@ -39,7 +24,7 @@ class _CorpusMarketInformation(MarketInformation):
         object.__setattr__(
             self,
             "published_time",
-            datetime(2026, 8, 10, tzinfo=timezone.utc),
+            datetime(2026, 8, 21, tzinfo=timezone.utc),
         )
         object.__setattr__(self, "content", content)
         object.__setattr__(self, "category", ())
@@ -54,14 +39,15 @@ class _CorpusMarketInformation(MarketInformation):
         raise AttributeError("corpus information is immutable")
 
 
-class ChineseFactualAnalysisCorpusTests(unittest.TestCase):
-    """Run all active G3A cases through real matcher, relevance, and analysis."""
+class ChineseRelativeValueAnalysisCorpusTests(unittest.TestCase):
+    """Run all active G4 cases through the real deterministic analysis stack."""
 
-    def test_all_twelve_factual_cases_match_their_direction_contracts(self) -> None:
+    def test_all_six_cases_create_non_directional_structural_observations(self) -> None:
         corpus = load_chinese_deterministic_corpus()
-        cases = cases_for_phase(corpus, "g3a")
+        cases = cases_for_phase(corpus, "g4")
         matcher = CommodityMatcher()
         resolver = CommodityRelevanceResolver(matcher=matcher)
+        detector = RelativeValueDetector()
         analyst = RuleBasedAnalyst(
             commodity_matcher=matcher,
             commodity_relevance_resolver=resolver,
@@ -71,41 +57,51 @@ class ChineseFactualAnalysisCorpusTests(unittest.TestCase):
             corpus.active_enforcement_phases,
             ("g2", "g3a", "g3b1", "g3b2", "g4"),
         )
-        self.assertEqual(len(cases), 12)
+        self.assertEqual(len(cases), 6)
         self.assertEqual(
             tuple(case.id for case in cases),
-            tuple(
-                case.id
-                for case in corpus.cases
-                if case.enforcement.direction == "g3a"
+            (
+                "aluminum-cast-alloy-arbitrage",
+                "cross-commodity-spread-widening",
+                "calendar-spread-repair",
+                "aluminum-alloy-paired-legs",
+                "carry-opportunity-strengthening",
+                "crude-fuel-crack-spread-strength",
             ),
         )
+
         for case in cases:
             with self.subTest(case_id=case.id):
                 information = _CorpusMarketInformation(case.title, case.content)
-                self.assertEqual(information.title, case.title)
-                self.assertEqual(information.content, case.content)
-
                 relevance = resolver.assess(information)
+                primary_keys = {entry.commodity_key for entry in relevance.primary}
+                primary_matches = tuple(
+                    match
+                    for match in relevance.lexical_matches
+                    if match.commodity_key in primary_keys
+                )
+                detection = detector.detect(
+                    information,
+                    primary_matches,
+                    relevance.lexical_matches,
+                )
                 analysis = analyst.analyze([information])[0]
 
                 self.assertEqual(
-                    tuple(match.commodity_key for match in relevance.lexical_matches),
-                    case.expected.commodity_keys,
-                )
-                self.assertEqual(
-                    tuple(item.commodity_key for item in relevance.primary),
+                    tuple(entry.commodity_key for entry in relevance.primary),
                     case.expected.commodity_keys,
                 )
                 self.assertEqual(relevance.mentioned, ())
-                self.assertEqual(analysis.market_direction, case.expected.market_direction)
-                self.assertEqual(case.expected.signal_kind, "fundamental_fact")
-                self.assertEqual(len(case.expected.reasoning_tags), 1)
-                self.assertIn(
-                    _REASONING_BY_TAG[case.expected.reasoning_tags[0]],
-                    analysis.reasoning_details,
-                )
-                self.assertEqual(analysis.confidence_score, 75)
+                self.assertEqual(detection.signal_kind, "relative_value")
+                self.assertEqual(len(detection.observations), 1)
+                observation = detection.observations[0]
+                self.assertEqual(observation.direction, "not_applicable")
+                self.assertEqual(observation.commodity_keys, case.expected.commodity_keys)
+                self.assertEqual(observation.rule_ids, case.expected.reasoning_tags)
+                self.assertEqual(analysis.market_direction, "neutral")
+                self.assertEqual(analysis.confidence_score, 60)
+                self.assertIn(observation.reasoning, analysis.reasoning_details)
+                self.assertNotIn("Detected direct", " ".join(analysis.reasoning_details))
                 self.assertIs(analysis.market_information, information)
 
 

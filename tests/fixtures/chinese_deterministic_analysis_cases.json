@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "active_enforcement_phases": ["g2", "g3a", "g3b1", "g3b2"],
+  "active_enforcement_phases": ["g2", "g3a", "g3b1", "g3b2", "g4"],
   "cases": [
     {
       "id": "live-hog-basic-identity",
@@ -454,23 +454,23 @@
     },
     {
       "id": "cross-commodity-spread-widening",
-      "title": "跨品种价差扩大。",
+      "title": "原铝与铸造铝合金价差扩大。",
       "content": "",
       "provenance": "synthetic_original",
       "scenario_tags": ["relative_value", "spread", "neutral"],
-      "expected": {"commodity_keys": [], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["cross_commodity_spread_widening"], "signal_kind": "relative_value"},
-      "enforcement": {"commodity": "not_applicable", "direction": "not_applicable", "relative_value": "g4"},
-      "notes": "An unnamed spread has no single-outcome direction."
+      "expected": {"commodity_keys": ["aluminum", "cast_aluminum_alloy"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["cross_commodity_spread_widening"], "signal_kind": "relative_value"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "g4"},
+      "notes": "An explicitly identified cross-commodity spread has no outright direction."
     },
     {
       "id": "calendar-spread-repair",
-      "title": "近远月价差存在修复空间。",
+      "title": "原油近远月价差存在修复空间。",
       "content": "",
       "provenance": "synthetic_original",
       "scenario_tags": ["relative_value", "spread", "neutral"],
-      "expected": {"commodity_keys": [], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["calendar_spread_repair"], "signal_kind": "relative_value"},
-      "enforcement": {"commodity": "not_applicable", "direction": "not_applicable", "relative_value": "g4"},
-      "notes": "Calendar spread repair requires a separate signal model."
+      "expected": {"commodity_keys": ["crude_oil"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["calendar_spread_repair"], "signal_kind": "relative_value"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "g4"},
+      "notes": "An explicitly identified calendar spread requires a separate observation model."
     },
     {
       "id": "aluminum-alloy-paired-legs",
@@ -484,13 +484,13 @@
     },
     {
       "id": "carry-opportunity-strengthening",
-      "title": "正套机会增强。",
+      "title": "铜期货正套机会增强。",
       "content": "",
       "provenance": "synthetic_original",
       "scenario_tags": ["relative_value", "arbitrage", "neutral"],
-      "expected": {"commodity_keys": [], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["carry_opportunity"], "signal_kind": "relative_value"},
-      "enforcement": {"commodity": "not_applicable", "direction": "not_applicable", "relative_value": "g4"},
-      "notes": "Carry language is not an outright market direction."
+      "expected": {"commodity_keys": ["copper"], "no_commodity_keys": [], "market_direction": "neutral", "reasoning_tags": ["carry_opportunity"], "signal_kind": "relative_value"},
+      "enforcement": {"commodity": "g2", "direction": "not_applicable", "relative_value": "g4"},
+      "notes": "An explicitly identified carry relationship is not an outright market direction."
     },
     {
       "id": "crude-fuel-crack-spread-strength",

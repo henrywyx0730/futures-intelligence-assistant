@@ -73,7 +73,7 @@ class ChineseQualifiedAnalysisCorpusTests(unittest.TestCase):
 
         self.assertEqual(
             corpus.active_enforcement_phases,
-            ("g2", "g3a", "g3b1", "g3b2"),
+            ("g2", "g3a", "g3b1", "g3b2", "g4"),
         )
         self.assertEqual(len(cases), 11)
         self.assertEqual(

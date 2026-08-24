@@ -29,19 +29,19 @@ class ChineseDeterministicAnalysisCorpusTests(unittest.TestCase):
     def setUp(self) -> None:
         self.corpus = load_chinese_deterministic_corpus()
 
-    def test_fixture_loads_with_g3b2_conflict_and_horizon_enforcement(self) -> None:
-        """Activate reviewed G3B2 semantics without activating G4."""
+    def test_fixture_loads_with_g4_relative_value_enforcement(self) -> None:
+        """Activate reviewed G4 while preserving all earlier active phases."""
         self.assertTrue(FIXTURE_PATH.is_file())
         self.assertEqual(self.corpus.schema_version, 1)
         self.assertEqual(
             self.corpus.active_enforcement_phases,
-            ("g2", "g3a", "g3b1", "g3b2"),
+            ("g2", "g3a", "g3b1", "g3b2", "g4"),
         )
-        self.assertNotIn("g4", self.corpus.active_enforcement_phases)
-        self.assertEqual(len(cases_for_phase(self.corpus, "g2")), 55)
+        self.assertEqual(len(cases_for_phase(self.corpus, "g2")), 58)
         self.assertEqual(len(cases_for_phase(self.corpus, "g3a")), 12)
         self.assertEqual(len(cases_for_phase(self.corpus, "g3b1")), 11)
         self.assertEqual(len(cases_for_phase(self.corpus, "g3b2")), 5)
+        self.assertEqual(len(cases_for_phase(self.corpus, "g4")), 6)
 
     def test_has_exact_case_count_and_primary_category_distribution(self) -> None:
         """Keep the initial corpus deliberately small and reviewable."""
@@ -114,16 +114,32 @@ class ChineseDeterministicAnalysisCorpusTests(unittest.TestCase):
         ):
             self.assertIn(case_id, cases_by_id)
 
-    def test_relative_value_cases_remain_neutral_and_deferred_to_g4(self) -> None:
-        """Prevent arbitrage language from becoming an outright direction in G1."""
+    def test_relative_value_cases_remain_non_directional_under_active_g4(self) -> None:
+        """Keep active structural observations separate from outright direction."""
         cases = cases_with_tag(self.corpus, "relative_value")
         self.assertEqual(len(cases), 6)
         for case in cases:
             with self.subTest(case_id=case.id):
                 self.assertEqual(case.expected.market_direction, "neutral")
                 self.assertEqual(case.expected.signal_kind, "relative_value")
+                self.assertTrue(case.expected.commodity_keys)
+                self.assertEqual(case.enforcement.commodity, "g2")
                 self.assertEqual(case.enforcement.direction, "not_applicable")
                 self.assertEqual(case.enforcement.relative_value, "g4")
+
+    def test_loader_rejects_relative_value_without_primary_identity(self) -> None:
+        """Require G4 fixture cases to carry a reviewed G2 Primary anchor."""
+        payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        case = next(
+            item
+            for item in payload["cases"]
+            if item["id"] == "calendar-spread-repair"
+        )
+        case["expected"]["commodity_keys"] = []
+        case["enforcement"]["commodity"] = "not_applicable"
+
+        with self.assertRaisesRegex(ValueError, "relative-value deferral"):
+            _parse_corpus_payload(payload)
 
     def test_fixture_is_synthetic_and_contains_no_urls_or_source_markers(self) -> None:
         """Ensure the corpus does not preserve report prose or source-specific text."""

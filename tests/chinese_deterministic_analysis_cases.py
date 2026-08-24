@@ -426,7 +426,8 @@ def _validate_phase_assignment(
         if (
             expected.market_direction != "neutral"
             or expected.signal_kind != "relative_value"
-            or enforcement.commodity not in {"g2", "not_applicable"}
+            or not expected.commodity_keys
+            or enforcement.commodity != "g2"
             or enforcement.direction != "not_applicable"
             or enforcement.relative_value != "g4"
         ):
