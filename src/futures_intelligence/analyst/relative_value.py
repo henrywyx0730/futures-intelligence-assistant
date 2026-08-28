@@ -86,6 +86,16 @@ class RelativeValueDetection:
 
     observations: tuple[RelativeValueObservation, ...] = ()
 
+    def __post_init__(self) -> None:
+        """Require an immutable, typed observation collection."""
+        if type(self.observations) is not tuple or any(
+            not isinstance(observation, RelativeValueObservation)
+            for observation in self.observations
+        ):
+            raise TypeError(
+                "observations must be a tuple of RelativeValueObservation objects"
+            )
+
     @property
     def signal_kind(self) -> str | None:
         """Expose a stable detector kind without changing MarketAnalysis."""

@@ -14,6 +14,20 @@ from tests.chinese_deterministic_analysis_cases import (
 )
 
 
+_EXPECTED_STRUCTURAL_PROPERTIES = {
+    "aluminum-cast-alloy-arbitrage": ("relative_value", "identified", None),
+    "cross-commodity-spread-widening": ("relative_value", "widening", None),
+    "calendar-spread-repair": (
+        "calendar_spread",
+        "repair_potential",
+        "near_far",
+    ),
+    "aluminum-alloy-paired-legs": ("relative_value", "paired_legs", None),
+    "carry-opportunity-strengthening": ("carry", "strengthening", None),
+    "crude-fuel-crack-spread-strength": ("crack_spread", "strengthening", None),
+}
+
+
 class _CorpusMarketInformation(MarketInformation):
     """Immutable test input preserving authored empty corpus content exactly."""
 
@@ -95,6 +109,14 @@ class ChineseRelativeValueAnalysisCorpusTests(unittest.TestCase):
                 self.assertEqual(detection.signal_kind, "relative_value")
                 self.assertEqual(len(detection.observations), 1)
                 observation = detection.observations[0]
+                self.assertEqual(
+                    (
+                        observation.relationship_type,
+                        observation.relationship_state,
+                        observation.horizon,
+                    ),
+                    _EXPECTED_STRUCTURAL_PROPERTIES[case.id],
+                )
                 self.assertEqual(observation.direction, "not_applicable")
                 self.assertEqual(observation.commodity_keys, case.expected.commodity_keys)
                 self.assertEqual(observation.rule_ids, case.expected.reasoning_tags)

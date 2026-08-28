@@ -10,7 +10,9 @@ from futures_intelligence.analyst.fundamental_signal import (
     ChineseFundamentalSignalDetector,
 )
 from futures_intelligence.analyst.relative_value import (
+    RelativeValueDetection,
     RelativeValueDetector,
+    RelativeValueObservation,
 )
 from futures_intelligence.analyst.rule_based import RuleBasedAnalyst
 from futures_intelligence.models import MarketInformation
@@ -32,6 +34,50 @@ def _information(
         commodities=commodities,
         reliability_score=3,
     )
+
+
+def _observation() -> RelativeValueObservation:
+    return RelativeValueObservation(
+        relationship_key="crude_oil_calendar_spread",
+        relationship_type="calendar_spread",
+        commodity_keys=("crude_oil",),
+        commodity_labels=("Crude Oil",),
+        relationship_state="repair_potential",
+        rule_ids=("calendar_spread_repair",),
+        reasoning="Detected a reviewed structural relationship.",
+        horizon="near_far",
+    )
+
+
+class RelativeValueDetectionTests(unittest.TestCase):
+    """Protect the immutable tuple-backed detector result contract."""
+
+    def test_accepts_only_tuples_of_relative_value_observations(self) -> None:
+        observation = _observation()
+
+        empty_detection = RelativeValueDetection(())
+        populated_detection = RelativeValueDetection((observation,))
+
+        self.assertEqual(empty_detection.observations, ())
+        self.assertIsNone(empty_detection.signal_kind)
+        self.assertEqual(populated_detection.observations, (observation,))
+        self.assertIs(populated_detection.observations[0], observation)
+        self.assertEqual(populated_detection.signal_kind, "relative_value")
+
+    def test_rejects_mutable_or_invalid_observation_collections(self) -> None:
+        observation = _observation()
+        invalid_values = (
+            [],
+            [observation],
+            ("not-an-observation",),
+            (object(),),
+            (observation, "bad"),
+        )
+
+        for value in invalid_values:
+            with self.subTest(value=value):
+                with self.assertRaises(TypeError):
+                    RelativeValueDetection(value)  # type: ignore[arg-type]
 
 
 class RelativeValueDetectorTests(unittest.TestCase):
