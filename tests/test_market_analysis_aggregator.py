@@ -4,7 +4,12 @@ from datetime import datetime, timezone
 import unittest
 
 from futures_intelligence.analyst import MarketAnalysisAggregator, RuleBasedAnalyst
-from futures_intelligence.analyst.commodity_matcher import CommodityMatch
+from futures_intelligence.analyst.commodity_matcher import (
+    CommodityDefinition,
+    CommodityMatch,
+    CommodityMatcher,
+)
+from futures_intelligence.analyst.commodity_relevance import CommodityRelevanceResolver
 from futures_intelligence.models import MarketAnalysis, MarketInformation
 
 
@@ -35,6 +40,25 @@ def make_analysis(
         confidence_score=confidence_score,
         reasoning_details=reasoning_details,
     )
+
+
+def make_research_analysis(
+    title: str,
+    content: str,
+    *,
+    commodities: tuple[str, ...] = (),
+) -> MarketAnalysis:
+    """Create a research analysis through the real deterministic analyst stack."""
+    information = MarketInformation(
+        title=title,
+        source="Synthetic research",
+        source_type="research_report",
+        published_time=datetime(2026, 7, 19, tzinfo=timezone.utc),
+        content=content,
+        reliability_score=3,
+        commodities=commodities,
+    )
+    return RuleBasedAnalyst().analyze([information])[0]
 
 
 class MarketAnalysisAggregatorTests(unittest.TestCase):
@@ -214,6 +238,286 @@ class MarketAnalysisAggregatorTests(unittest.TestCase):
         )
 
         self.assertEqual(views, ())
+
+    def test_research_report_groups_only_primary_not_mentioned_commodities(self) -> None:
+        analysis = make_research_analysis(
+            "乙二醇专题",
+            "原油成本变化影响油制乙二醇利润。",
+        )
+        relevance = CommodityRelevanceResolver().assess(
+            analysis.market_information
+        )
+
+        views = self.aggregator.aggregate_by_commodity([analysis])
+
+        self.assertEqual(
+            tuple(item.commodity_key for item in relevance.primary),
+            ("ethylene_glycol",),
+        )
+        self.assertEqual(
+            tuple(item.commodity_key for item in relevance.mentioned),
+            ("crude_oil",),
+        )
+        self.assertEqual(tuple(view.commodity_key for view in views), ("ethylene_glycol",))
+
+    def test_research_report_mentioned_only_commodity_creates_no_view(self) -> None:
+        analysis = make_research_analysis(
+            "Macro Policy Outlook",
+            "OPEC production cuts affect crude oil inflation assumptions.",
+        )
+        relevance = CommodityRelevanceResolver().assess(
+            analysis.market_information
+        )
+
+        views = self.aggregator.aggregate_by_commodity([analysis])
+
+        self.assertEqual(relevance.primary, ())
+        self.assertEqual(
+            tuple(item.commodity_key for item in relevance.mentioned),
+            ("crude_oil",),
+        )
+        self.assertEqual(views, ())
+
+    def test_research_report_zero_primary_drops_all_lexical_mentions(self) -> None:
+        analysis = make_research_analysis(
+            "Macro market tracking",
+            "Gold and crude oil were discussed as contextual markets.",
+        )
+        relevance = CommodityRelevanceResolver().assess(
+            analysis.market_information
+        )
+
+        views = self.aggregator.aggregate_by_commodity([analysis])
+
+        self.assertEqual(relevance.primary, ())
+        self.assertEqual(
+            tuple(item.commodity_key for item in relevance.mentioned),
+            ("crude_oil", "gold"),
+        )
+        self.assertEqual(views, ())
+
+    def test_research_source_scope_commodities_do_not_create_a_view(self) -> None:
+        analysis = make_research_analysis(
+            "Macro market tracking",
+            "Policy assumptions were reviewed.",
+            commodities=("crude_oil",),
+        )
+
+        views = self.aggregator.aggregate_by_commodity([analysis])
+
+        self.assertEqual(views, ())
+
+    def test_multi_primary_research_report_contributes_once_in_relevance_order(self) -> None:
+        analysis = make_research_analysis(
+            "原铝与铸造铝合金价差专题",
+            "价差变化受到两端供需影响。",
+        )
+        relevance = CommodityRelevanceResolver().assess(
+            analysis.market_information
+        )
+
+        views = self.aggregator.aggregate_by_commodity([analysis, analysis])
+
+        self.assertEqual(
+            tuple(item.commodity_key for item in relevance.primary),
+            ("aluminum", "cast_aluminum_alloy"),
+        )
+        self.assertEqual(
+            tuple(view.commodity_key for view in views),
+            ("aluminum", "cast_aluminum_alloy"),
+        )
+        self.assertEqual(tuple(view.analysis_count for view in views), (1, 1))
+
+    def test_non_research_grouping_keeps_legacy_matcher_ownership(self) -> None:
+        class FalseyResolver:
+            def __init__(self) -> None:
+                self.call_count = 0
+
+            def __bool__(self) -> bool:
+                return False
+
+            def assess(self, information: MarketInformation):
+                self.call_count += 1
+                raise AssertionError("non-research sources must not use relevance")
+
+        resolver = FalseyResolver()
+        aggregator = MarketAnalysisAggregator(
+            commodity_relevance_resolver=resolver,  # type: ignore[arg-type]
+        )
+        analysis = make_analysis(
+            "neutral",
+            50,
+            ("Legacy non-research context.",),
+            source_type="rss",
+            title="Macro market update",
+            content="Crude oil remained in focus.",
+        )
+
+        views = aggregator.aggregate_by_commodity([analysis])
+
+        self.assertEqual(tuple(view.commodity_key for view in views), ("crude_oil",))
+        self.assertEqual(resolver.call_count, 0)
+
+    def test_falsey_relevance_resolver_is_retained_for_research_reports(self) -> None:
+        class FalseyDelegatingResolver:
+            def __init__(self) -> None:
+                self.delegate = CommodityRelevanceResolver()
+                self.calls: list[MarketInformation] = []
+
+            def __bool__(self) -> bool:
+                return False
+
+            def assess(self, information: MarketInformation):
+                self.calls.append(information)
+                return self.delegate.assess(information)
+
+        resolver = FalseyDelegatingResolver()
+        aggregator = MarketAnalysisAggregator(
+            commodity_relevance_resolver=resolver,  # type: ignore[arg-type]
+        )
+        analysis = make_research_analysis("Gold outlook", "Macro context.")
+
+        views = aggregator.aggregate_by_commodity([analysis])
+
+        self.assertEqual(tuple(view.commodity_key for view in views), ("gold",))
+        self.assertEqual(resolver.calls, [analysis.market_information])
+
+    def test_relevance_resolver_is_called_once_per_research_analysis(self) -> None:
+        class CountingResolver:
+            def __init__(self) -> None:
+                self.delegate = CommodityRelevanceResolver()
+                self.calls: list[MarketInformation] = []
+
+            def assess(self, information: MarketInformation):
+                self.calls.append(information)
+                return self.delegate.assess(information)
+
+        resolver = CountingResolver()
+        aggregator = MarketAnalysisAggregator(
+            commodity_relevance_resolver=resolver,  # type: ignore[arg-type]
+        )
+        analysis = make_research_analysis("Gold outlook", "Macro context.")
+
+        views = aggregator.aggregate_by_commodity([analysis, analysis])
+
+        self.assertEqual(tuple(view.commodity_key for view in views), ("gold",))
+        self.assertEqual(resolver.calls, [analysis.market_information])
+
+    def test_relevance_resolver_programming_errors_propagate_unchanged(self) -> None:
+        expected_error = OSError("resolver failed")
+
+        class RaisingResolver:
+            def assess(self, information: MarketInformation):
+                raise expected_error
+
+        aggregator = MarketAnalysisAggregator(
+            commodity_relevance_resolver=RaisingResolver(),  # type: ignore[arg-type]
+        )
+        analysis = make_research_analysis("Gold outlook", "Macro context.")
+
+        with self.assertRaises(OSError) as captured:
+            aggregator.aggregate_by_commodity([analysis])
+
+        self.assertIs(captured.exception, expected_error)
+
+    def test_g4_only_research_analysis_keeps_existing_neutral_contribution(self) -> None:
+        structural_reasoning = (
+            "Detected a Crude Oil calendar-spread repair relationship; "
+            "no outright market direction was assigned."
+        )
+        analysis = make_research_analysis(
+            "原油近远月价差存在修复空间。",
+            "结构关系受到关注。",
+        )
+        relevance = CommodityRelevanceResolver().assess(
+            analysis.market_information
+        )
+
+        global_view = self.aggregator.aggregate([analysis])
+        commodity_views = self.aggregator.aggregate_by_commodity([analysis])
+
+        self.assertEqual(
+            tuple(item.commodity_key for item in relevance.primary),
+            ("crude_oil",),
+        )
+        self.assertEqual(analysis.market_direction, "neutral")
+        self.assertEqual(analysis.confidence_score, 60)
+        self.assertIn(structural_reasoning, analysis.reasoning_details)
+        self.assertEqual(global_view.overall_market_direction, "neutral")
+        self.assertEqual(global_view.aggregated_confidence_score, 60)
+        self.assertIn(structural_reasoning, global_view.reasoning_details)
+        self.assertEqual(len(commodity_views), 1)
+        self.assertEqual(commodity_views[0].commodity_key, "crude_oil")
+        self.assertEqual(commodity_views[0].overall_direction, "neutral")
+        self.assertEqual(commodity_views[0].confidence_score, 60)
+        self.assertIn(structural_reasoning, commodity_views[0].reasoning_details)
+
+    def test_zero_primary_research_analysis_remains_globally_eligible(self) -> None:
+        information = MarketInformation(
+            title="Macro outlook",
+            source="Synthetic research",
+            source_type="research_report",
+            published_time=datetime(2026, 7, 19, tzinfo=timezone.utc),
+            content="Crude oil remained contextual.",
+            reliability_score=3,
+            metadata={"price_change": 2},
+        )
+        analysis = RuleBasedAnalyst().analyze([information])[0]
+        relevance = CommodityRelevanceResolver().assess(information)
+
+        global_view = self.aggregator.aggregate([analysis])
+        commodity_views = self.aggregator.aggregate_by_commodity([analysis])
+
+        self.assertEqual(relevance.primary, ())
+        self.assertEqual(
+            tuple(item.commodity_key for item in relevance.mentioned),
+            ("crude_oil",),
+        )
+        self.assertEqual(commodity_views, ())
+        self.assertEqual(analysis.market_direction, "bullish")
+        self.assertEqual(analysis.confidence_score, 70)
+        self.assertEqual(global_view.overall_market_direction, "bullish")
+        self.assertEqual(global_view.aggregated_confidence_score, 70)
+        self.assertEqual(global_view.analysis_count, 1)
+
+    def test_default_resolver_shares_injected_matcher_for_research_ownership(self) -> None:
+        matcher = CommodityMatcher(
+            definitions=(
+                CommodityDefinition(
+                    "custom_asset",
+                    "Custom Asset",
+                    ("customasset",),
+                ),
+            ),
+            ambiguous_alias_exclusions=(),
+        )
+        analysis = make_analysis(
+            "neutral",
+            60,
+            ("Custom research context.",),
+            source_type="research_report",
+            title="Customasset outlook",
+            content="Research context.",
+        )
+        information = analysis.market_information
+
+        self.assertEqual(CommodityRelevanceResolver().assess(information).primary, ())
+        self.assertEqual(
+            tuple(
+                item.commodity_key
+                for item in CommodityRelevanceResolver(matcher=matcher).assess(
+                    information
+                ).primary
+            ),
+            ("custom_asset",),
+        )
+
+        views = MarketAnalysisAggregator(
+            commodity_matcher=matcher,
+        ).aggregate_by_commodity([analysis])
+
+        self.assertEqual(tuple(view.commodity_key for view in views), ("custom_asset",))
+        self.assertEqual(tuple(view.commodity_label for view in views), ("Custom Asset",))
 
     def test_uses_stable_first_appearance_order_without_registry_order(self) -> None:
         class UnorderedMatcher:

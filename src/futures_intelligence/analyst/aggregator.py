@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from futures_intelligence.analyst.commodity_matcher import CommodityMatch, CommodityMatcher
+from futures_intelligence.analyst.commodity_relevance import CommodityRelevanceResolver
 from futures_intelligence.analyst.market_movement import MarketMovementDetector
 from futures_intelligence.models import MarketAnalysis
 
@@ -48,12 +49,47 @@ class _CommodityContribution:
     reasoning_details: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class _AggregationCommodity:
+    """One canonical commodity identity eligible for aggregate ownership."""
+
+    commodity_key: str
+    commodity_label: str
+
+
+@dataclass(frozen=True)
+class _CommodityOwnership:
+    """Ordered commodity owners and lexical evidence from one resolution pass."""
+
+    commodities: tuple[_AggregationCommodity, ...]
+    lexical_matches: tuple[CommodityMatch, ...]
+
+
+@dataclass(frozen=True)
+class _OwnedAnalysis:
+    """One analysis and its already-resolved lexical movement context."""
+
+    analysis: MarketAnalysis
+    lexical_matches: tuple[CommodityMatch, ...]
+
+
 class MarketAnalysisAggregator:
     """Combine deterministic MarketAnalysis outputs into one market view."""
 
-    def __init__(self, commodity_matcher: CommodityMatcher | None = None) -> None:
-        """Use the shared article-level matcher for optional commodity grouping."""
-        self._commodity_matcher = commodity_matcher or CommodityMatcher()
+    def __init__(
+        self,
+        commodity_matcher: CommodityMatcher | None = None,
+        commodity_relevance_resolver: CommodityRelevanceResolver | None = None,
+    ) -> None:
+        """Use shared lexical and relevance collaborators for commodity grouping."""
+        self._commodity_matcher = (
+            commodity_matcher if commodity_matcher is not None else CommodityMatcher()
+        )
+        self._commodity_relevance_resolver = (
+            commodity_relevance_resolver
+            if commodity_relevance_resolver is not None
+            else CommodityRelevanceResolver(matcher=self._commodity_matcher)
+        )
         self._market_movement_detector = MarketMovementDetector()
 
     def aggregate(self, analyses: list[MarketAnalysis]) -> AggregatedMarketView:
@@ -95,17 +131,29 @@ class MarketAnalysisAggregator:
     ) -> tuple[CommodityMarketView, ...]:
         """Return stable commodity views without creating analyses or API calls."""
         _validate_analyses(analyses)
-        grouped: dict[str, tuple[CommodityMatch, list[MarketAnalysis], set[int], int]] = {}
+        grouped: dict[
+            str,
+            tuple[_AggregationCommodity, list[_OwnedAnalysis], set[int], int],
+        ] = {}
+        ownership_by_analysis_id: dict[int, _CommodityOwnership] = {}
         for index, analysis in enumerate(analyses):
-            for match in self._commodity_matcher.match(analysis.market_information):
-                group = grouped.get(match.commodity_key)
+            analysis_id = id(analysis)
+            if analysis_id not in ownership_by_analysis_id:
+                ownership_by_analysis_id[analysis_id] = self._commodity_ownership(
+                    analysis
+                )
+            ownership = ownership_by_analysis_id[analysis_id]
+            for commodity in ownership.commodities:
+                group = grouped.get(commodity.commodity_key)
                 if group is None:
-                    group = (match, [], set(), index)
-                    grouped[match.commodity_key] = group
+                    group = (commodity, [], set(), index)
+                    grouped[commodity.commodity_key] = group
                 _, group_analyses, seen_analysis_ids, _ = group
-                if id(analysis) not in seen_analysis_ids:
-                    group_analyses.append(analysis)
-                    seen_analysis_ids.add(id(analysis))
+                if analysis_id not in seen_analysis_ids:
+                    group_analyses.append(
+                        _OwnedAnalysis(analysis, ownership.lexical_matches)
+                    )
+                    seen_analysis_ids.add(analysis_id)
 
         configured_order = {
             key: index
@@ -131,9 +179,29 @@ class MarketAnalysisAggregator:
                 group_analyses,
                 configured_labels,
                 self._market_movement_detector,
-                self._commodity_matcher,
             )
             for match, group_analyses, _, _ in ordered_groups
+        )
+
+    def _commodity_ownership(self, analysis: MarketAnalysis) -> _CommodityOwnership:
+        """Resolve bucket ownership without changing aggregate mathematics."""
+        information = analysis.market_information
+        if information.source_type == "research_report":
+            assessment = self._commodity_relevance_resolver.assess(information)
+            return _CommodityOwnership(
+                tuple(
+                    _AggregationCommodity(item.commodity_key, item.commodity_label)
+                    for item in assessment.primary
+                ),
+                assessment.lexical_matches,
+            )
+        matches = self._commodity_matcher.match(information)
+        return _CommodityOwnership(
+            tuple(
+                _AggregationCommodity(match.commodity_key, match.commodity_label)
+                for match in matches
+            ),
+            matches,
         )
 
 
@@ -202,16 +270,20 @@ def _is_source_scope_detail(detail: str) -> bool:
 
 
 def _commodity_market_view(
-    match: CommodityMatch,
-    analyses: list[MarketAnalysis],
+    match: _AggregationCommodity,
+    analyses: list[_OwnedAnalysis],
     configured_labels: tuple[str, ...],
     movement_detector: MarketMovementDetector,
-    commodity_matcher: CommodityMatcher,
 ) -> CommodityMarketView:
     """Build one scoped view using the existing aggregate calculations unchanged."""
     contributions = tuple(
-        _commodity_contribution(analysis, match, movement_detector, commodity_matcher)
-        for analysis in analyses
+        _commodity_contribution(
+            owned_analysis.analysis,
+            match,
+            movement_detector,
+            owned_analysis.lexical_matches,
+        )
+        for owned_analysis in analyses
     )
     overall_direction, confidence_score, reasoning_details = _aggregate_contributions(
         contributions
@@ -232,14 +304,14 @@ def _commodity_market_view(
 
 def _commodity_contribution(
     analysis: MarketAnalysis,
-    match: CommodityMatch,
+    match: _AggregationCommodity,
     movement_detector: MarketMovementDetector,
-    commodity_matcher: CommodityMatcher,
+    lexical_matches: tuple[CommodityMatch, ...],
 ) -> _CommodityContribution:
     """Apply a resolved commodity movement without changing the analysis object."""
     signals = movement_detector.detect_by_commodity(
         analysis.market_information,
-        commodity_matcher.match(analysis.market_information),
+        lexical_matches,
     )
     signal = next(
         (signal for signal in signals if signal.commodity_key == match.commodity_key),
