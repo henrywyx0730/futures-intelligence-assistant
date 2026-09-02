@@ -40,6 +40,7 @@ def initialize_database(
             market_direction TEXT NOT NULL DEFAULT 'neutral',
             confidence_score INTEGER NOT NULL DEFAULT 0,
             reasoning_details TEXT NOT NULL DEFAULT '[]',
+            directional_provenance TEXT NOT NULL DEFAULT 'unspecified',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (market_information_id) REFERENCES market_information(id)
         );
@@ -73,6 +74,7 @@ def _add_market_analysis_columns_if_needed(connection: sqlite3.Connection) -> No
         "market_direction": "TEXT NOT NULL DEFAULT 'neutral'",
         "confidence_score": "INTEGER NOT NULL DEFAULT 0",
         "reasoning_details": "TEXT NOT NULL DEFAULT '[]'",
+        "directional_provenance": "TEXT NOT NULL DEFAULT 'unspecified'",
     }
     for column, definition in additions.items():
         if column not in columns:

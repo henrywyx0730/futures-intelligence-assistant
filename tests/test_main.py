@@ -859,6 +859,7 @@ class MainTests(unittest.TestCase):
             ("summary", " Summary with surrounding whitespace "),
             ("reasoning_details", (" Detail with surrounding whitespace ",)),
             ("confidence_score", True),
+            ("directional_provenance", "STRUCTURAL_ONLY"),
         ):
             with self.subTest(field_name=field_name, value=value):
                 source = _huatai_pdf_source()

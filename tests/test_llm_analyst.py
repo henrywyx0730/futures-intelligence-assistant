@@ -111,6 +111,7 @@ class LLMAnalystTests(unittest.TestCase):
         self.assertEqual(analysis.market_direction, "bullish")
         self.assertEqual(analysis.confidence_score, 81)
         self.assertEqual(analysis.reasoning_details, ("Demand language is positive.",))
+        self.assertEqual(analysis.directional_provenance, "external_analyst")
         request = client.responses.calls[0]
         self.assertEqual(json.loads(str(request["input"])), {
             "content": information.content,

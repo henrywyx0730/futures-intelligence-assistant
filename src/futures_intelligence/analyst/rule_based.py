@@ -22,7 +22,11 @@ from futures_intelligence.analyst.market_movement import (
     MarketMovementSignal,
 )
 from futures_intelligence.analyst.relative_value import RelativeValueDetector
-from futures_intelligence.models import MarketAnalysis, MarketInformation
+from futures_intelligence.models import (
+    DirectionalProvenance,
+    MarketAnalysis,
+    MarketInformation,
+)
 
 BULLISH_KEYWORDS = (
     "inventory declined",
@@ -126,7 +130,12 @@ class RuleBasedAnalyst(BaseAnalyst):
             fundamental_conflicts = ()
             relative_value_observations = ()
             summary = _summary_for_commodities(commodities)
-        market_direction, directional_details, directional_confidence = (
+        (
+            market_direction,
+            directional_details,
+            directional_confidence,
+            directional_provenance,
+        ) = (
             _directional_signals(
                 item,
                 text,
@@ -137,6 +146,11 @@ class RuleBasedAnalyst(BaseAnalyst):
                 fundamental_conflicts,
             )
         )
+        if (
+            directional_provenance == "no_directional_signal"
+            and relative_value_observations
+        ):
+            directional_provenance = "structural_only"
         reasoning_details = [
             f"Source type: {item.source_type}; reliability score: {item.reliability_score}/5."
         ]
@@ -173,6 +187,7 @@ class RuleBasedAnalyst(BaseAnalyst):
             market_direction=market_direction,
             confidence_score=confidence_score,
             reasoning_details=tuple(reasoning_details),
+            directional_provenance=directional_provenance,
         )
 
 def _commodity_labels(matches: tuple[CommodityMatch, ...]) -> tuple[str, ...]:
@@ -211,7 +226,7 @@ def _directional_signals(
     fundamental_signals: tuple[FundamentalSignal, ...],
     fundamental_qualifications: tuple[FundamentalQualification, ...],
     fundamental_conflicts: tuple[FundamentalConflict, ...],
-) -> tuple[str, tuple[str, ...], int]:
+) -> tuple[str, tuple[str, ...], int, DirectionalProvenance]:
     """Determine direction from structured quote data or deterministic text terms."""
     price_change = item.metadata.get("price_change")
     if _is_number(price_change):
@@ -220,17 +235,20 @@ def _directional_signals(
                 "bullish",
                 (f"Structured price change is positive ({price_change}).",),
                 20,
+                "metadata_direction",
             )
         if price_change < 0:
             return (
                 "bearish",
                 (f"Structured price change is negative ({price_change}).",),
                 20,
+                "metadata_direction",
             )
         return (
             "neutral",
             ("Structured price change is unchanged (0).",),
             20,
+            "metadata_direction",
         )
 
     if movement_signal.priority > 0:
@@ -240,19 +258,30 @@ def _directional_signals(
             {SETTLEMENT_PRIORITY: 25, NUMERICAL_PRIORITY: 20}.get(
                 movement_signal.priority, 15
             ),
+            "observed_market_movement",
         )
 
     if fundamental_conflicts:
+        conflict_provenance: DirectionalProvenance = (
+            "horizon_conflict"
+            if all(
+                conflict.conflict_kind == "horizon_conflict"
+                for conflict in fundamental_conflicts
+            )
+            else "same_market_conflict"
+        )
         if len(fundamental_conflicts) == 1:
             return (
                 "neutral",
                 (fundamental_conflicts[0].reasoning,),
                 0,
+                conflict_provenance,
             )
         return (
             "neutral",
             ("Conflicting direct fundamentals span multiple primary commodities.",),
             0,
+            conflict_provenance,
         )
 
     directions_by_commodity = {
@@ -273,6 +302,7 @@ def _directional_signals(
             "neutral",
             ("Conflicting bullish and bearish direct factual signals were detected.",),
             0,
+            "same_market_conflict",
         )
     factual_directions = {
         direction
@@ -287,6 +317,7 @@ def _directional_signals(
                 "no single report-level direction was assigned.",
             ),
             0,
+            "cross_commodity_abstention",
         )
 
     bullish_matches = _matched_keywords(text, BULLISH_KEYWORDS)
@@ -347,18 +378,29 @@ def _directional_signals(
             "bullish",
             bullish_details,
             confidence,
+            (
+                "direct_fundamental"
+                if factual_directions == {"bullish"}
+                else "deterministic_text_signal"
+            ),
         )
     if bearish_count > bullish_count:
         return (
             "bearish",
             bearish_details,
             confidence,
+            (
+                "direct_fundamental"
+                if factual_directions == {"bearish"}
+                else "deterministic_text_signal"
+            ),
         )
     if bullish_count or bearish_count:
         return (
             "neutral",
             ("Conflicting bullish and bearish deterministic signals were detected.",),
             confidence,
+            "deterministic_text_signal",
         )
     if fundamental_qualifications:
         return (
@@ -370,11 +412,13 @@ def _directional_signals(
                 )
             ),
             0,
+            "qualified_only",
         )
     return (
         "neutral",
         ("No deterministic directional signal was detected.",),
         0,
+        "no_directional_signal",
     )
 
 

@@ -1363,6 +1363,173 @@ class RuleBasedAnalystTests(unittest.TestCase):
         for analysis in (metadata, movement):
             self.assertNotIn("no deterministic directional conclusion", " ".join(analysis.reasoning_details))
 
+    def test_assigns_directional_provenance_from_structured_decision_paths(self) -> None:
+        cases = (
+            (
+                "metadata direction",
+                make_information(
+                    "原油供应收紧。",
+                    "Market context.",
+                    source_type="research_report",
+                    metadata={"price_change": -2.0},
+                ),
+                "bearish",
+                80,
+                "metadata_direction",
+            ),
+            (
+                "observed movement",
+                make_information(
+                    "原油供应收紧。",
+                    "Oil prices fell 2%.",
+                    source_type="research_report",
+                ),
+                "bearish",
+                80,
+                "observed_market_movement",
+            ),
+            (
+                "direct bullish fundamental",
+                make_information(
+                    "原油供应收紧。",
+                    "Market context.",
+                    source_type="research_report",
+                ),
+                "bullish",
+                75,
+                "direct_fundamental",
+            ),
+            (
+                "direct bearish fundamental",
+                make_information(
+                    "原油供应增加。",
+                    "Market context.",
+                    source_type="research_report",
+                ),
+                "bearish",
+                75,
+                "direct_fundamental",
+            ),
+            (
+                "plain no signal",
+                make_information(
+                    "原油专题",
+                    "Market context.",
+                    source_type="research_report",
+                ),
+                "neutral",
+                60,
+                "no_directional_signal",
+            ),
+            (
+                "qualification only",
+                make_information(
+                    "原油专题",
+                    "如果制裁升级，供应收紧。",
+                    source_type="research_report",
+                ),
+                "neutral",
+                60,
+                "qualified_only",
+            ),
+            (
+                "same-market factual conflict",
+                make_information(
+                    "原油供应收紧；原油供应增加。",
+                    "Market context.",
+                    source_type="research_report",
+                ),
+                "neutral",
+                60,
+                "same_market_conflict",
+            ),
+            (
+                "same-market discourse conflict",
+                make_information(
+                    "原油供应收紧，但需求疲弱。",
+                    "Market context.",
+                    source_type="research_report",
+                ),
+                "neutral",
+                60,
+                "same_market_conflict",
+            ),
+            (
+                "horizon conflict",
+                make_information(
+                    "燃料油短期偏强，中长期承压。",
+                    "Market context.",
+                    source_type="research_report",
+                ),
+                "neutral",
+                60,
+                "horizon_conflict",
+            ),
+            (
+                "cross-commodity abstention",
+                make_information(
+                    "原油与燃料油专题",
+                    "原油供应收紧；燃料油供应宽松。",
+                    source_type="research_report",
+                ),
+                "neutral",
+                60,
+                "cross_commodity_abstention",
+            ),
+            (
+                "structural only",
+                make_information(
+                    "原油近远月价差存在修复空间。",
+                    "结构关系受到关注。",
+                    source_type="research_report",
+                ),
+                "neutral",
+                60,
+                "structural_only",
+            ),
+            (
+                "qualification before structural context",
+                make_information(
+                    "原油近远月价差存在修复空间。",
+                    "如果制裁升级，供应收紧。",
+                    source_type="research_report",
+                ),
+                "neutral",
+                60,
+                "qualified_only",
+            ),
+            (
+                "direct fundamental with structural context",
+                make_information(
+                    "原油专题报告",
+                    "原油供应收紧。原油近远月价差存在修复空间。",
+                    source_type="research_report",
+                ),
+                "bullish",
+                75,
+                "direct_fundamental",
+            ),
+            (
+                "legacy deterministic text signal",
+                make_information(
+                    "Oil update",
+                    "Supply disruption was reported.",
+                    source_type="rss",
+                ),
+                "bullish",
+                70,
+                "deterministic_text_signal",
+            ),
+        )
+
+        for name, information, direction, confidence, provenance in cases:
+            with self.subTest(name=name):
+                analysis = self.analyst.analyze([information])[0]
+
+                self.assertEqual(analysis.market_direction, direction)
+                self.assertEqual(analysis.confidence_score, confidence)
+                self.assertEqual(analysis.directional_provenance, provenance)
+
     def test_chinese_factual_rules_generalize_without_generic_sentiment(self) -> None:
         paraphrase = self.analyst.analyze(
             [

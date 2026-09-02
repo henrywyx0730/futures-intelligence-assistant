@@ -311,6 +311,7 @@ def _analysis_from_response(
             market_direction=payload["market_direction"],
             confidence_score=payload["confidence_score"],
             reasoning_details=tuple(payload["reasoning_details"]),
+            directional_provenance="external_analyst",
         )
     except (TypeError, ValueError):
         return None

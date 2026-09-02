@@ -37,8 +37,8 @@ class SQLiteDatabaseTests(unittest.TestCase):
                     row[1]
                     for row in connection.execute("PRAGMA table_info(market_information)")
                 }
-                analysis_columns = {
-                    row[1]
+                analysis_column_details = {
+                    row[1]: row
                     for row in connection.execute("PRAGMA table_info(market_analysis)")
                 }
             finally:
@@ -55,10 +55,14 @@ class SQLiteDatabaseTests(unittest.TestCase):
                     "market_direction",
                     "confidence_score",
                     "reasoning_details",
+                    "directional_provenance",
                     "created_at",
                 }
-                <= analysis_columns
+                <= analysis_column_details.keys()
             )
+            provenance_column = analysis_column_details["directional_provenance"]
+            self.assertEqual(provenance_column[3], 1)
+            self.assertEqual(provenance_column[4], "'unspecified'")
 
     def test_upgrades_existing_market_information_table_with_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -119,17 +123,28 @@ class SQLiteDatabaseTests(unittest.TestCase):
 
             connection = initialize_database(database_path)
             try:
-                columns = {
-                    row[1]
+                column_details = {
+                    row[1]: row
                     for row in connection.execute("PRAGMA table_info(market_analysis)")
                 }
             finally:
                 connection.close()
 
             self.assertTrue(
-                {"market_direction", "confidence_score", "reasoning_details"}
-                <= columns
+                {
+                    "market_direction",
+                    "confidence_score",
+                    "reasoning_details",
+                    "directional_provenance",
+                }
+                <= column_details.keys()
             )
+            provenance_column = column_details["directional_provenance"]
+            self.assertEqual(provenance_column[3], 1)
+            self.assertEqual(provenance_column[4], "'unspecified'")
+
+            connection = initialize_database(database_path)
+            connection.close()
 
 
 if __name__ == "__main__":

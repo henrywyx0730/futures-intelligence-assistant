@@ -3,6 +3,7 @@
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
 
@@ -152,6 +153,154 @@ class DatabaseRepositoryTests(unittest.TestCase):
             analyses[0].market_information.metadata,
             {"series_id": "WCESTUS1", "units": "barrels"},
         )
+
+    def test_round_trips_directional_provenance(self) -> None:
+        cases = (
+            ("structural_only", "neutral", 60),
+            ("direct_fundamental", "bullish", 75),
+            ("external_analyst", "neutral", 45),
+            ("unspecified", "bearish", 65),
+        )
+
+        for provenance, direction, confidence in cases:
+            with self.subTest(provenance=provenance):
+                database_path = (
+                    Path(self.temporary_directory.name) / f"{provenance}.db"
+                )
+                analysis = MarketAnalysis(
+                    make_information(datetime.now(timezone.utc)),
+                    "Inventory data was published.",
+                    market_direction=direction,
+                    confidence_score=confidence,
+                    reasoning_details=("Persisted reasoning",),
+                    directional_provenance=provenance,
+                )
+
+                store_market_analysis(database_path, analysis)
+                loaded = get_recent_market_analysis(database_path, hours=1)
+
+                self.assertEqual(len(loaded), 1)
+                self.assertEqual(
+                    loaded[0].market_information, analysis.market_information
+                )
+                self.assertEqual(loaded[0].summary, analysis.summary)
+                self.assertEqual(loaded[0].market_direction, direction)
+                self.assertEqual(loaded[0].confidence_score, confidence)
+                self.assertEqual(
+                    loaded[0].reasoning_details, analysis.reasoning_details
+                )
+                self.assertEqual(loaded[0].directional_provenance, provenance)
+
+    def test_upgrades_legacy_analysis_row_to_unspecified(self) -> None:
+        now = datetime.now(timezone.utc)
+        connection = sqlite3.connect(self.database_path)
+        try:
+            connection.executescript(
+                """
+                CREATE TABLE market_information (
+                    id INTEGER PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    source_type TEXT NOT NULL,
+                    published_time TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    category TEXT NOT NULL DEFAULT '[]',
+                    commodities TEXT NOT NULL DEFAULT '[]',
+                    regions TEXT NOT NULL DEFAULT '[]',
+                    importance TEXT NOT NULL,
+                    reliability_score INTEGER NOT NULL,
+                    url TEXT,
+                    metadata TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE TABLE market_analysis (
+                    id INTEGER PRIMARY KEY,
+                    market_information_id INTEGER NOT NULL,
+                    summary TEXT NOT NULL,
+                    market_direction TEXT NOT NULL DEFAULT 'neutral',
+                    confidence_score INTEGER NOT NULL DEFAULT 0,
+                    reasoning_details TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (market_information_id) REFERENCES market_information(id)
+                );
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO market_information (
+                    title, source, source_type, published_time, content, category,
+                    commodities, regions, importance, reliability_score, url, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "Legacy oil analysis",
+                    "EIA",
+                    "official_data",
+                    now.isoformat(),
+                    "Legacy inventory content.",
+                    '["energy"]',
+                    '["crude_oil"]',
+                    '["United States"]',
+                    "medium",
+                    5,
+                    "https://www.eia.gov",
+                    '{"series_id": "legacy"}',
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO market_analysis (
+                    market_information_id, summary, market_direction,
+                    confidence_score, reasoning_details
+                ) VALUES (1, ?, ?, ?, ?)
+                """,
+                (
+                    "Legacy analysis summary.",
+                    "bullish",
+                    70,
+                    '["Legacy reasoning"]',
+                ),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        first_connection = initialize_database(self.database_path)
+        first_connection.close()
+        second_connection = initialize_database(self.database_path)
+        second_connection.close()
+        loaded = get_recent_market_analysis(self.database_path, hours=1)
+
+        self.assertEqual(len(loaded), 1)
+        self.assertEqual(loaded[0].market_information.title, "Legacy oil analysis")
+        self.assertEqual(loaded[0].summary, "Legacy analysis summary.")
+        self.assertEqual(loaded[0].market_direction, "bullish")
+        self.assertEqual(loaded[0].confidence_score, 70)
+        self.assertEqual(loaded[0].reasoning_details, ("Legacy reasoning",))
+        self.assertEqual(loaded[0].directional_provenance, "unspecified")
+
+    def test_rejects_invalid_persisted_directional_provenance(self) -> None:
+        analysis = MarketAnalysis(
+            make_information(datetime.now(timezone.utc)),
+            "Inventory data was published.",
+            directional_provenance="no_directional_signal",
+        )
+        analysis_id = store_market_analysis(self.database_path, analysis)
+        connection = initialize_database(self.database_path)
+        try:
+            connection.execute(
+                """
+                UPDATE market_analysis
+                SET directional_provenance = 'not_a_real_provenance'
+                WHERE id = ?
+                """,
+                (analysis_id,),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        with self.assertRaises(ValueError):
+            get_recent_market_analysis(self.database_path, hours=1)
 
 
 if __name__ == "__main__":

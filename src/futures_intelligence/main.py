@@ -486,6 +486,7 @@ def _validate_htfc_analyses(
                 analysis.market_direction,
                 analysis.confidence_score,
                 analysis.reasoning_details,
+                analysis.directional_provenance,
             )
         except (TypeError, ValueError) as error:
             raise _HuataiSmokeTestFailure(
@@ -497,6 +498,8 @@ def _validate_htfc_analyses(
             or analysis.market_direction != canonical.market_direction
             or analysis.confidence_score != canonical.confidence_score
             or analysis.reasoning_details != canonical.reasoning_details
+            or analysis.directional_provenance
+            != canonical.directional_provenance
         ):
             raise _HuataiSmokeTestFailure(
                 "router returned a non-canonical MarketAnalysis item."
@@ -593,6 +596,7 @@ def _analyze_one_htfc_pdf_market_information(item: MarketInformation) -> MarketA
             analysis.market_direction,
             analysis.confidence_score,
             analysis.reasoning_details,
+            analysis.directional_provenance,
         )
     except (TypeError, ValueError) as error:
         raise _HuataiSmokeTestFailure(

@@ -35,8 +35,8 @@ def store_market_analysis(database_path: str | Path, analysis: MarketAnalysis) -
                 """
                 INSERT INTO market_analysis (
                     market_information_id, summary, market_direction,
-                    confidence_score, reasoning_details
-                ) VALUES (?, ?, ?, ?, ?)
+                    confidence_score, reasoning_details, directional_provenance
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     information_id,
@@ -44,6 +44,7 @@ def store_market_analysis(database_path: str | Path, analysis: MarketAnalysis) -
                     analysis.market_direction,
                     analysis.confidence_score,
                     json.dumps(analysis.reasoning_details),
+                    analysis.directional_provenance,
                 ),
             )
             return int(cursor.lastrowid)
@@ -94,7 +95,7 @@ def get_recent_market_analysis(
                    market_information.metadata,
                    market_analysis.summary, market_analysis.market_direction,
                    market_analysis.confidence_score, market_analysis.reasoning_details,
-                   market_analysis.created_at
+                   market_analysis.directional_provenance, market_analysis.created_at
             FROM market_analysis
             JOIN market_information
                 ON market_analysis.market_information_id = market_information.id
@@ -113,6 +114,7 @@ def get_recent_market_analysis(
             market_direction=str(row[13]),
             confidence_score=int(row[14]),
             reasoning_details=tuple(json.loads(str(row[15]))),
+            directional_provenance=str(row[16]),
         )
         for row in reversed(recent_rows)
     ]
