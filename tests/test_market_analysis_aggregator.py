@@ -22,6 +22,7 @@ def make_analysis(
     title: str = "Market update",
     content: str = "Test content.",
     commodities: tuple[str, ...] = (),
+    directional_provenance: str = "unspecified",
 ) -> MarketAnalysis:
     """Create an analysis with the requested aggregate inputs."""
     information = MarketInformation(
@@ -39,6 +40,7 @@ def make_analysis(
         market_direction=direction,
         confidence_score=confidence_score,
         reasoning_details=reasoning_details,
+        directional_provenance=directional_provenance,
     )
 
 
@@ -420,7 +422,9 @@ class MarketAnalysisAggregatorTests(unittest.TestCase):
 
         self.assertIs(captured.exception, expected_error)
 
-    def test_g4_only_research_analysis_keeps_existing_neutral_contribution(self) -> None:
+    def test_g4_only_research_analysis_keeps_ownership_without_directional_contribution(
+        self,
+    ) -> None:
         structural_reasoning = (
             "Detected a Crude Oil calendar-spread repair relationship; "
             "no outright market direction was assigned."
@@ -442,15 +446,228 @@ class MarketAnalysisAggregatorTests(unittest.TestCase):
         )
         self.assertEqual(analysis.market_direction, "neutral")
         self.assertEqual(analysis.confidence_score, 60)
+        self.assertEqual(analysis.directional_provenance, "structural_only")
         self.assertIn(structural_reasoning, analysis.reasoning_details)
         self.assertEqual(global_view.overall_market_direction, "neutral")
-        self.assertEqual(global_view.aggregated_confidence_score, 60)
+        self.assertEqual(global_view.aggregated_confidence_score, 0)
+        self.assertEqual(global_view.analysis_count, 1)
         self.assertIn(structural_reasoning, global_view.reasoning_details)
         self.assertEqual(len(commodity_views), 1)
         self.assertEqual(commodity_views[0].commodity_key, "crude_oil")
         self.assertEqual(commodity_views[0].overall_direction, "neutral")
-        self.assertEqual(commodity_views[0].confidence_score, 60)
+        self.assertEqual(commodity_views[0].confidence_score, 0)
+        self.assertEqual(commodity_views[0].analysis_count, 1)
         self.assertIn(structural_reasoning, commodity_views[0].reasoning_details)
+
+    def test_non_directional_provenances_have_zero_aggregate_confidence(self) -> None:
+        cases = (
+            (
+                "structural only",
+                make_research_analysis(
+                    "原油近远月价差存在修复空间。",
+                    "结构关系受到关注。",
+                ),
+                "structural_only",
+            ),
+            (
+                "qualification only",
+                make_research_analysis(
+                    "原油专题",
+                    "如果制裁升级，供应收紧。",
+                ),
+                "qualified_only",
+            ),
+            (
+                "no directional signal",
+                make_research_analysis(
+                    "原油专题",
+                    "Market context.",
+                ),
+                "no_directional_signal",
+            ),
+        )
+
+        for name, analysis, expected_provenance in cases:
+            with self.subTest(name=name):
+                view = self.aggregator.aggregate([analysis])
+
+                self.assertEqual(analysis.market_direction, "neutral")
+                self.assertEqual(analysis.confidence_score, 60)
+                self.assertEqual(
+                    analysis.directional_provenance,
+                    expected_provenance,
+                )
+                self.assertEqual(view.overall_market_direction, "neutral")
+                self.assertEqual(view.aggregated_confidence_score, 0)
+                self.assertEqual(view.analysis_count, 1)
+
+    def test_all_non_directional_provenances_keep_membership_with_zero_confidence(
+        self,
+    ) -> None:
+        analyses = [
+            make_analysis(
+                "neutral",
+                60,
+                ("Structural context.",),
+                directional_provenance="structural_only",
+            ),
+            make_analysis(
+                "neutral",
+                60,
+                ("Qualified context.",),
+                directional_provenance="qualified_only",
+            ),
+            make_analysis(
+                "neutral",
+                60,
+                ("No directional evidence.",),
+                directional_provenance="no_directional_signal",
+            ),
+        ]
+
+        view = self.aggregator.aggregate(analyses)
+
+        self.assertEqual(view.overall_market_direction, "neutral")
+        self.assertEqual(view.aggregated_confidence_score, 0)
+        self.assertEqual(view.analysis_count, 3)
+        self.assertEqual(
+            view.reasoning_details,
+            (
+                "Structural context.",
+                "Qualified context.",
+                "No directional evidence.",
+            ),
+        )
+
+    def test_non_directional_provenances_do_not_dilute_direct_fundamental(self) -> None:
+        direct = make_research_analysis(
+            "原油供应收紧。",
+            "Market context.",
+        )
+        non_directional = (
+            make_research_analysis(
+                "原油近远月价差存在修复空间。",
+                "结构关系受到关注。",
+            ),
+            make_research_analysis(
+                "原油专题",
+                "如果制裁升级，供应收紧。",
+            ),
+            make_research_analysis(
+                "原油专题",
+                "Market context.",
+            ),
+        )
+
+        direct_view = self.aggregator.aggregate([direct])
+
+        self.assertEqual(direct.directional_provenance, "direct_fundamental")
+        self.assertEqual(direct_view.overall_market_direction, "bullish")
+        self.assertEqual(direct_view.aggregated_confidence_score, 75)
+        self.assertEqual(
+            tuple(analysis.directional_provenance for analysis in non_directional),
+            ("structural_only", "qualified_only", "no_directional_signal"),
+        )
+        for analysis in non_directional:
+            with self.subTest(provenance=analysis.directional_provenance):
+                combined = self.aggregator.aggregate([direct, analysis])
+
+                self.assertEqual(combined.overall_market_direction, "bullish")
+                self.assertEqual(combined.aggregated_confidence_score, 75)
+                self.assertEqual(combined.analysis_count, 2)
+
+    def test_structural_only_does_not_dilute_direct_bearish_fundamental(self) -> None:
+        direct = make_research_analysis(
+            "原油供应增加。",
+            "Market context.",
+        )
+        structural = make_research_analysis(
+            "原油近远月价差存在修复空间。",
+            "结构关系受到关注。",
+        )
+
+        view = self.aggregator.aggregate([direct, structural])
+
+        self.assertEqual(direct.directional_provenance, "direct_fundamental")
+        self.assertEqual(structural.directional_provenance, "structural_only")
+        self.assertEqual(view.overall_market_direction, "bearish")
+        self.assertEqual(view.aggregated_confidence_score, 75)
+        self.assertEqual(view.analysis_count, 2)
+
+    def test_conflict_and_abstention_provenances_retain_legacy_contribution(
+        self,
+    ) -> None:
+        direct = make_research_analysis(
+            "原油供应收紧。",
+            "Market context.",
+        )
+        controls = (
+            make_research_analysis(
+                "原油供应收紧；原油供应增加。",
+                "Market context.",
+            ),
+            make_research_analysis(
+                "燃料油短期偏强，中长期承压。",
+                "Market context.",
+            ),
+            make_research_analysis(
+                "原油与燃料油专题",
+                "原油供应收紧；燃料油供应宽松。",
+            ),
+        )
+
+        self.assertEqual(
+            tuple(analysis.directional_provenance for analysis in controls),
+            (
+                "same_market_conflict",
+                "horizon_conflict",
+                "cross_commodity_abstention",
+            ),
+        )
+        for analysis in controls:
+            with self.subTest(provenance=analysis.directional_provenance):
+                view = self.aggregator.aggregate([direct, analysis])
+
+                self.assertEqual(view.overall_market_direction, "bullish")
+                self.assertEqual(view.aggregated_confidence_score, 67)
+                self.assertEqual(view.analysis_count, 2)
+
+    def test_neutral_legacy_provenances_remain_directional_contributors(self) -> None:
+        provenances = (
+            "metadata_direction",
+            "observed_market_movement",
+            "deterministic_text_signal",
+            "external_analyst",
+            "unspecified",
+        )
+
+        for provenance in provenances:
+            with self.subTest(provenance=provenance):
+                analysis = make_analysis(
+                    "neutral",
+                    61,
+                    (f"{provenance} neutral evidence.",),
+                    directional_provenance=provenance,
+                )
+                view = self.aggregator.aggregate([analysis])
+
+                self.assertEqual(view.overall_market_direction, "neutral")
+                self.assertEqual(view.aggregated_confidence_score, 61)
+                self.assertEqual(view.analysis_count, 1)
+
+    def test_directional_unspecified_analysis_keeps_legacy_contribution(self) -> None:
+        analysis = make_analysis(
+            "bullish",
+            65,
+            ("Legacy bullish evidence.",),
+            directional_provenance="unspecified",
+        )
+
+        view = self.aggregator.aggregate([analysis])
+
+        self.assertEqual(view.overall_market_direction, "bullish")
+        self.assertEqual(view.aggregated_confidence_score, 65)
+        self.assertEqual(view.analysis_count, 1)
 
     def test_zero_primary_research_analysis_remains_globally_eligible(self) -> None:
         information = MarketInformation(

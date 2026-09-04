@@ -17,6 +17,14 @@ SOURCE_TYPE_WEIGHTS = {
     "rss": 80,
 }
 
+_NON_DIRECTIONAL_PROVENANCES = frozenset(
+    {
+        "no_directional_signal",
+        "qualified_only",
+        "structural_only",
+    }
+)
+
 
 @dataclass(frozen=True)
 class AggregatedMarketView:
@@ -103,25 +111,37 @@ class MarketAnalysisAggregator:
                 analysis_count=0,
             )
 
+        directional_analyses = [
+            analysis for analysis in analyses if _is_directional_contributor(analysis)
+        ]
         bullish_weight = sum(
             _signal_weight(analysis)
-            for analysis in analyses
+            for analysis in directional_analyses
             if analysis.market_direction == "bullish"
         )
         bearish_weight = sum(
             _signal_weight(analysis)
-            for analysis in analyses
+            for analysis in directional_analyses
             if analysis.market_direction == "bearish"
         )
-        source_weights = [_source_weight(analysis) for analysis in analyses]
+        source_weights = [
+            _source_weight(analysis) for analysis in directional_analyses
+        ]
         overall_direction = _overall_direction(bullish_weight, bearish_weight)
         return AggregatedMarketView(
             overall_market_direction=overall_direction,
-            aggregated_confidence_score=sum(
-                analysis.confidence_score * source_weight
-                for analysis, source_weight in zip(analyses, source_weights)
-            )
-            // sum(source_weights),
+            aggregated_confidence_score=(
+                sum(
+                    analysis.confidence_score * source_weight
+                    for analysis, source_weight in zip(
+                        directional_analyses,
+                        source_weights,
+                    )
+                )
+                // sum(source_weights)
+                if source_weights
+                else 0
+            ),
             reasoning_details=_combined_reasoning_details(analyses, overall_direction),
             analysis_count=len(analyses),
         )
@@ -209,6 +229,11 @@ def _validate_analyses(analyses: list[MarketAnalysis]) -> None:
     """Reject non-analysis values before computing an aggregate."""
     if not all(isinstance(analysis, MarketAnalysis) for analysis in analyses):
         raise TypeError("analyses must contain only MarketAnalysis instances")
+
+
+def _is_directional_contributor(analysis: MarketAnalysis) -> bool:
+    """Return whether an analysis participates in direction/confidence math."""
+    return analysis.directional_provenance not in _NON_DIRECTIONAL_PROVENANCES
 
 
 def _overall_direction(bullish_weight: int, bearish_weight: int) -> str:
@@ -339,25 +364,40 @@ def _aggregate_contributions(
     contributions: tuple[_CommodityContribution, ...],
 ) -> tuple[str, int, tuple[str, ...]]:
     """Reuse global source-aware weighting for immutable commodity contributions."""
+    directional_contributions = tuple(
+        contribution
+        for contribution in contributions
+        if _is_directional_contributor(contribution.analysis)
+    )
     bullish_weight = sum(
         _signal_weight(contribution.analysis)
-        for contribution in contributions
+        for contribution in directional_contributions
         if contribution.direction == "bullish"
     )
     bearish_weight = sum(
         _signal_weight(contribution.analysis)
-        for contribution in contributions
+        for contribution in directional_contributions
         if contribution.direction == "bearish"
     )
-    source_weights = [_source_weight(contribution.analysis) for contribution in contributions]
+    source_weights = [
+        _source_weight(contribution.analysis)
+        for contribution in directional_contributions
+    ]
     overall_direction = _overall_direction(bullish_weight, bearish_weight)
     return (
         overall_direction,
-        sum(
-            contribution.analysis.confidence_score * source_weight
-            for contribution, source_weight in zip(contributions, source_weights)
-        )
-        // sum(source_weights),
+        (
+            sum(
+                contribution.analysis.confidence_score * source_weight
+                for contribution, source_weight in zip(
+                    directional_contributions,
+                    source_weights,
+                )
+            )
+            // sum(source_weights)
+            if source_weights
+            else 0
+        ),
         _combined_contribution_reasoning(contributions, overall_direction),
     )
 
