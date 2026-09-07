@@ -44,6 +44,18 @@ def initialize_database(
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (market_information_id) REFERENCES market_information(id)
         );
+
+        CREATE TABLE IF NOT EXISTS market_analysis_commodity_directional_evidence (
+            market_analysis_id INTEGER NOT NULL,
+            ordinal INTEGER NOT NULL,
+            commodity_key TEXT NOT NULL,
+            commodity_label TEXT NOT NULL,
+            market_direction TEXT NOT NULL,
+            PRIMARY KEY (market_analysis_id, ordinal),
+            UNIQUE (market_analysis_id, commodity_key),
+            FOREIGN KEY (market_analysis_id) REFERENCES market_analysis(id)
+                ON DELETE CASCADE
+        );
         """
     )
     _add_metadata_column_if_needed(connection)

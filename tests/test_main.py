@@ -860,6 +860,7 @@ class MainTests(unittest.TestCase):
             ("reasoning_details", (" Detail with surrounding whitespace ",)),
             ("confidence_score", True),
             ("directional_provenance", "STRUCTURAL_ONLY"),
+            ("commodity_directional_evidence", ["not canonical evidence"]),
         ):
             with self.subTest(field_name=field_name, value=value):
                 source = _huatai_pdf_source()

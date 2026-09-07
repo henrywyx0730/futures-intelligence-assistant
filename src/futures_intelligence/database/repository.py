@@ -8,7 +8,11 @@ from pathlib import Path
 import sqlite3
 
 from futures_intelligence.database.sqlite import initialize_database
-from futures_intelligence.models import MarketAnalysis, MarketInformation
+from futures_intelligence.models import (
+    CommodityDirectionalEvidence,
+    MarketAnalysis,
+    MarketInformation,
+)
 
 
 def store_market_information(
@@ -47,7 +51,28 @@ def store_market_analysis(database_path: str | Path, analysis: MarketAnalysis) -
                     analysis.directional_provenance,
                 ),
             )
-            return int(cursor.lastrowid)
+            analysis_id = int(cursor.lastrowid)
+            connection.executemany(
+                """
+                INSERT INTO market_analysis_commodity_directional_evidence (
+                    market_analysis_id, ordinal, commodity_key,
+                    commodity_label, market_direction
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    (
+                        analysis_id,
+                        ordinal,
+                        evidence.commodity_key,
+                        evidence.commodity_label,
+                        evidence.market_direction,
+                    )
+                    for ordinal, evidence in enumerate(
+                        analysis.commodity_directional_evidence
+                    )
+                ),
+            )
+            return analysis_id
     finally:
         connection.close()
 
@@ -95,18 +120,23 @@ def get_recent_market_analysis(
                    market_information.metadata,
                    market_analysis.summary, market_analysis.market_direction,
                    market_analysis.confidence_score, market_analysis.reasoning_details,
-                   market_analysis.directional_provenance, market_analysis.created_at
+                   market_analysis.directional_provenance, market_analysis.id,
+                   market_analysis.created_at
             FROM market_analysis
             JOIN market_information
                 ON market_analysis.market_information_id = market_information.id
             """
         ).fetchall()
+        recent_rows = [
+            row for row in rows if _analysis_created_at(row[-1]) >= cutoff
+        ]
+        evidence_by_analysis_id = _commodity_directional_evidence_by_analysis_id(
+            connection,
+            tuple(int(row[17]) for row in recent_rows),
+        )
     finally:
         connection.close()
 
-    recent_rows = [
-        row for row in rows if _analysis_created_at(row[-1]) >= cutoff
-    ]
     return [
         MarketAnalysis(
             market_information=_market_information_from_row(row[:12]),
@@ -115,6 +145,10 @@ def get_recent_market_analysis(
             confidence_score=int(row[14]),
             reasoning_details=tuple(json.loads(str(row[15]))),
             directional_provenance=str(row[16]),
+            commodity_directional_evidence=evidence_by_analysis_id.get(
+                int(row[17]),
+                (),
+            ),
         )
         for row in reversed(recent_rows)
     ]
@@ -179,3 +213,35 @@ def _analysis_created_at(value: object) -> datetime:
     return datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S").replace(
         tzinfo=timezone.utc
     )
+
+
+def _commodity_directional_evidence_by_analysis_id(
+    connection: sqlite3.Connection,
+    analysis_ids: tuple[int, ...],
+) -> dict[int, tuple[CommodityDirectionalEvidence, ...]]:
+    """Load ordered scoped evidence for the selected persisted analyses."""
+    if not analysis_ids:
+        return {}
+    placeholders = ", ".join("?" for _ in analysis_ids)
+    rows = connection.execute(
+        """
+        SELECT market_analysis_id, commodity_key, commodity_label, market_direction
+        FROM market_analysis_commodity_directional_evidence
+        WHERE market_analysis_id IN ("""
+        + placeholders
+        + ") ORDER BY market_analysis_id, ordinal",
+        analysis_ids,
+    ).fetchall()
+    evidence_by_analysis_id: dict[int, list[CommodityDirectionalEvidence]] = {}
+    for analysis_id, commodity_key, commodity_label, market_direction in rows:
+        evidence_by_analysis_id.setdefault(int(analysis_id), []).append(
+            CommodityDirectionalEvidence(
+                commodity_key=str(commodity_key),
+                commodity_label=str(commodity_label),
+                market_direction=str(market_direction),
+            )
+        )
+    return {
+        analysis_id: tuple(evidence)
+        for analysis_id, evidence in evidence_by_analysis_id.items()
+    }

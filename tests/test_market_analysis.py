@@ -1,9 +1,14 @@
 """Tests for the market-analysis model."""
 
+from dataclasses import FrozenInstanceError
 from datetime import datetime, timezone
 import unittest
 
-from futures_intelligence.models import MarketAnalysis, MarketInformation
+from futures_intelligence.models import (
+    CommodityDirectionalEvidence,
+    MarketAnalysis,
+    MarketInformation,
+)
 
 
 def make_information() -> MarketInformation:
@@ -30,6 +35,146 @@ class MarketAnalysisTests(unittest.TestCase):
         self.assertEqual(analysis.confidence_score, 0)
         self.assertEqual(analysis.reasoning_details, ())
         self.assertEqual(analysis.directional_provenance, "unspecified")
+        self.assertEqual(analysis.commodity_directional_evidence, ())
+
+    def test_accepts_immutable_commodity_directional_evidence(self) -> None:
+        crude_oil = CommodityDirectionalEvidence(
+            "crude_oil",
+            "Crude Oil",
+            "bullish",
+        )
+        fuel_oil = CommodityDirectionalEvidence(
+            "fuel_oil",
+            "Fuel Oil",
+            "bullish",
+        )
+        analysis = MarketAnalysis(
+            make_information(),
+            "Resolved direct fundamentals.",
+            market_direction="bullish",
+            directional_provenance="direct_fundamental",
+            commodity_directional_evidence=(crude_oil, fuel_oil),
+        )
+
+        self.assertEqual(
+            analysis.commodity_directional_evidence,
+            (crude_oil, fuel_oil),
+        )
+        with self.assertRaises(FrozenInstanceError):
+            crude_oil.market_direction = "bearish"
+
+    def test_rejects_invalid_commodity_directional_evidence_values(self) -> None:
+        for fields in (
+            {
+                "commodity_key": "",
+                "commodity_label": "Crude Oil",
+                "market_direction": "bullish",
+            },
+            {
+                "commodity_key": " crude_oil ",
+                "commodity_label": "Crude Oil",
+                "market_direction": "bullish",
+            },
+            {
+                "commodity_key": "crude_oil",
+                "commodity_label": " ",
+                "market_direction": "bullish",
+            },
+            {
+                "commodity_key": "crude_oil",
+                "commodity_label": " Crude Oil ",
+                "market_direction": "bullish",
+            },
+            {
+                "commodity_key": "crude_oil",
+                "commodity_label": "Crude Oil",
+                "market_direction": "neutral",
+            },
+            {
+                "commodity_key": "crude_oil",
+                "commodity_label": "Crude Oil",
+                "market_direction": "higher",
+            },
+            {
+                "commodity_key": "crude_oil",
+                "commodity_label": "Crude Oil",
+                "market_direction": True,
+            },
+            {
+                "commodity_key": "crude_oil",
+                "commodity_label": "Crude Oil",
+                "market_direction": object(),
+            },
+            {
+                "commodity_key": True,
+                "commodity_label": "Crude Oil",
+                "market_direction": "bullish",
+            },
+            {
+                "commodity_key": "crude_oil",
+                "commodity_label": object(),
+                "market_direction": "bullish",
+            },
+        ):
+            with self.subTest(fields=fields):
+                with self.assertRaises(ValueError):
+                    CommodityDirectionalEvidence(**fields)
+
+    def test_rejects_invalid_commodity_directional_evidence_collections(self) -> None:
+        evidence = CommodityDirectionalEvidence(
+            "crude_oil",
+            "Crude Oil",
+            "bullish",
+        )
+        duplicate = CommodityDirectionalEvidence(
+            "crude_oil",
+            "Crude Oil",
+            "bullish",
+        )
+        for values in (
+            [evidence],
+            ("not evidence",),
+            (evidence, "not evidence"),
+            (evidence, duplicate),
+        ):
+            with self.subTest(values=values):
+                with self.assertRaises((TypeError, ValueError)):
+                    MarketAnalysis(
+                        make_information(),
+                        "Summary",
+                        market_direction="bullish",
+                        directional_provenance="direct_fundamental",
+                        commodity_directional_evidence=values,
+                    )
+
+    def test_rejects_incompatible_commodity_directional_evidence(self) -> None:
+        bullish = CommodityDirectionalEvidence(
+            "crude_oil",
+            "Crude Oil",
+            "bullish",
+        )
+        bearish = CommodityDirectionalEvidence(
+            "fuel_oil",
+            "Fuel Oil",
+            "bearish",
+        )
+        cases = (
+            ("structural_only", "neutral", (bullish,)),
+            ("direct_fundamental", "bullish", (bullish, bearish)),
+            ("cross_commodity_abstention", "neutral", (bullish,)),
+            ("cross_commodity_abstention", "neutral", (bullish, bullish)),
+        )
+
+        for provenance, direction, evidence in cases:
+            with self.subTest(provenance=provenance, evidence=evidence):
+                with self.assertRaises(ValueError):
+                    MarketAnalysis(
+                        make_information(),
+                        "Summary",
+                        market_direction=direction,
+                        directional_provenance=provenance,
+                        commodity_directional_evidence=evidence,
+                    )
 
     def test_creates_rich_analysis_with_normalized_fields(self) -> None:
         analysis = MarketAnalysis(

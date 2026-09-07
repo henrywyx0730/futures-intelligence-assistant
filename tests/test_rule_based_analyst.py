@@ -19,7 +19,10 @@ from futures_intelligence.analyst.fundamental_signal import (
     FundamentalSignal,
 )
 from futures_intelligence.analyst.rule_based import RuleBasedAnalyst
-from futures_intelligence.models import MarketInformation
+from futures_intelligence.models import (
+    CommodityDirectionalEvidence,
+    MarketInformation,
+)
 
 
 def make_information(
@@ -1376,6 +1379,7 @@ class RuleBasedAnalystTests(unittest.TestCase):
                 "bearish",
                 80,
                 "metadata_direction",
+                (),
             ),
             (
                 "observed movement",
@@ -1387,6 +1391,7 @@ class RuleBasedAnalystTests(unittest.TestCase):
                 "bearish",
                 80,
                 "observed_market_movement",
+                (),
             ),
             (
                 "direct bullish fundamental",
@@ -1398,6 +1403,7 @@ class RuleBasedAnalystTests(unittest.TestCase):
                 "bullish",
                 75,
                 "direct_fundamental",
+                (("crude_oil", "Crude Oil", "bullish"),),
             ),
             (
                 "direct bearish fundamental",
@@ -1409,6 +1415,22 @@ class RuleBasedAnalystTests(unittest.TestCase):
                 "bearish",
                 75,
                 "direct_fundamental",
+                (("crude_oil", "Crude Oil", "bearish"),),
+            ),
+            (
+                "agreeing multi-primary fundamentals",
+                make_information(
+                    "原油与燃料油专题",
+                    "原油供应收紧；燃料油供给减少。",
+                    source_type="research_report",
+                ),
+                "bullish",
+                75,
+                "direct_fundamental",
+                (
+                    ("crude_oil", "Crude Oil", "bullish"),
+                    ("fuel_oil", "Fuel Oil", "bullish"),
+                ),
             ),
             (
                 "plain no signal",
@@ -1420,6 +1442,19 @@ class RuleBasedAnalystTests(unittest.TestCase):
                 "neutral",
                 60,
                 "no_directional_signal",
+                (),
+            ),
+            (
+                "mentioned-only fundamental context",
+                make_information(
+                    "宏观政策跟踪",
+                    "原油供应收紧。",
+                    source_type="research_report",
+                ),
+                "neutral",
+                50,
+                "no_directional_signal",
+                (),
             ),
             (
                 "qualification only",
@@ -1431,6 +1466,7 @@ class RuleBasedAnalystTests(unittest.TestCase):
                 "neutral",
                 60,
                 "qualified_only",
+                (),
             ),
             (
                 "same-market factual conflict",
@@ -1442,6 +1478,7 @@ class RuleBasedAnalystTests(unittest.TestCase):
                 "neutral",
                 60,
                 "same_market_conflict",
+                (),
             ),
             (
                 "same-market discourse conflict",
@@ -1453,6 +1490,7 @@ class RuleBasedAnalystTests(unittest.TestCase):
                 "neutral",
                 60,
                 "same_market_conflict",
+                (),
             ),
             (
                 "horizon conflict",
@@ -1464,6 +1502,7 @@ class RuleBasedAnalystTests(unittest.TestCase):
                 "neutral",
                 60,
                 "horizon_conflict",
+                (),
             ),
             (
                 "cross-commodity abstention",
@@ -1475,6 +1514,10 @@ class RuleBasedAnalystTests(unittest.TestCase):
                 "neutral",
                 60,
                 "cross_commodity_abstention",
+                (
+                    ("crude_oil", "Crude Oil", "bullish"),
+                    ("fuel_oil", "Fuel Oil", "bearish"),
+                ),
             ),
             (
                 "structural only",
@@ -1486,6 +1529,7 @@ class RuleBasedAnalystTests(unittest.TestCase):
                 "neutral",
                 60,
                 "structural_only",
+                (),
             ),
             (
                 "qualification before structural context",
@@ -1497,6 +1541,7 @@ class RuleBasedAnalystTests(unittest.TestCase):
                 "neutral",
                 60,
                 "qualified_only",
+                (),
             ),
             (
                 "direct fundamental with structural context",
@@ -1508,6 +1553,7 @@ class RuleBasedAnalystTests(unittest.TestCase):
                 "bullish",
                 75,
                 "direct_fundamental",
+                (("crude_oil", "Crude Oil", "bullish"),),
             ),
             (
                 "legacy deterministic text signal",
@@ -1519,16 +1565,34 @@ class RuleBasedAnalystTests(unittest.TestCase):
                 "bullish",
                 70,
                 "deterministic_text_signal",
+                (),
             ),
         )
 
-        for name, information, direction, confidence, provenance in cases:
+        for name, information, direction, confidence, provenance, evidence in cases:
             with self.subTest(name=name):
                 analysis = self.analyst.analyze([information])[0]
 
                 self.assertEqual(analysis.market_direction, direction)
                 self.assertEqual(analysis.confidence_score, confidence)
                 self.assertEqual(analysis.directional_provenance, provenance)
+                self.assertTrue(
+                    all(
+                        isinstance(item, CommodityDirectionalEvidence)
+                        for item in analysis.commodity_directional_evidence
+                    )
+                )
+                self.assertEqual(
+                    tuple(
+                        (
+                            item.commodity_key,
+                            item.commodity_label,
+                            item.market_direction,
+                        )
+                        for item in analysis.commodity_directional_evidence
+                    ),
+                    evidence,
+                )
 
     def test_chinese_factual_rules_generalize_without_generic_sentiment(self) -> None:
         paraphrase = self.analyst.analyze(

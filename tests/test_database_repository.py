@@ -14,7 +14,11 @@ from futures_intelligence.database.repository import (
     store_market_analysis,
     store_market_information,
 )
-from futures_intelligence.models import MarketAnalysis, MarketInformation
+from futures_intelligence.models import (
+    CommodityDirectionalEvidence,
+    MarketAnalysis,
+    MarketInformation,
+)
 
 
 def make_information(
@@ -191,6 +195,77 @@ class DatabaseRepositoryTests(unittest.TestCase):
                 )
                 self.assertEqual(loaded[0].directional_provenance, provenance)
 
+    def test_round_trips_ordered_commodity_directional_evidence(self) -> None:
+        crude_bullish = CommodityDirectionalEvidence(
+            "crude_oil",
+            "Crude Oil",
+            "bullish",
+        )
+        fuel_bullish = CommodityDirectionalEvidence(
+            "fuel_oil",
+            "Fuel Oil",
+            "bullish",
+        )
+        fuel_bearish = CommodityDirectionalEvidence(
+            "fuel_oil",
+            "Fuel Oil",
+            "bearish",
+        )
+        cases = (
+            (
+                "one",
+                "bullish",
+                "direct_fundamental",
+                (crude_bullish,),
+            ),
+            (
+                "two_ordered",
+                "bullish",
+                "direct_fundamental",
+                (crude_bullish, fuel_bullish),
+            ),
+            (
+                "opposing",
+                "neutral",
+                "cross_commodity_abstention",
+                (crude_bullish, fuel_bearish),
+            ),
+        )
+
+        for name, direction, provenance, evidence in cases:
+            with self.subTest(name=name):
+                database_path = Path(self.temporary_directory.name) / f"{name}.db"
+                analysis = MarketAnalysis(
+                    make_information(datetime.now(timezone.utc)),
+                    "Persisted scoped evidence.",
+                    market_direction=direction,
+                    confidence_score=75 if direction != "neutral" else 60,
+                    reasoning_details=("Persisted reasoning",),
+                    directional_provenance=provenance,
+                    commodity_directional_evidence=evidence,
+                )
+
+                store_market_analysis(database_path, analysis)
+                loaded = get_recent_market_analysis(database_path, hours=1)
+
+                self.assertEqual(len(loaded), 1)
+                self.assertEqual(
+                    loaded[0].market_information,
+                    analysis.market_information,
+                )
+                self.assertEqual(loaded[0].summary, analysis.summary)
+                self.assertEqual(loaded[0].market_direction, direction)
+                self.assertEqual(
+                    loaded[0].confidence_score,
+                    analysis.confidence_score,
+                )
+                self.assertEqual(
+                    loaded[0].reasoning_details,
+                    analysis.reasoning_details,
+                )
+                self.assertEqual(loaded[0].directional_provenance, provenance)
+                self.assertEqual(loaded[0].commodity_directional_evidence, evidence)
+
     def test_upgrades_legacy_analysis_row_to_unspecified(self) -> None:
         now = datetime.now(timezone.utc)
         connection = sqlite3.connect(self.database_path)
@@ -277,6 +352,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(loaded[0].confidence_score, 70)
         self.assertEqual(loaded[0].reasoning_details, ("Legacy reasoning",))
         self.assertEqual(loaded[0].directional_provenance, "unspecified")
+        self.assertEqual(loaded[0].commodity_directional_evidence, ())
 
     def test_rejects_invalid_persisted_directional_provenance(self) -> None:
         analysis = MarketAnalysis(
@@ -301,6 +377,76 @@ class DatabaseRepositoryTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             get_recent_market_analysis(self.database_path, hours=1)
+
+    def test_rejects_invalid_persisted_commodity_directional_evidence(self) -> None:
+        analysis = MarketAnalysis(
+            make_information(datetime.now(timezone.utc)),
+            "Inventory data was published.",
+            market_direction="bullish",
+            directional_provenance="direct_fundamental",
+            commodity_directional_evidence=(
+                CommodityDirectionalEvidence(
+                    "crude_oil",
+                    "Crude Oil",
+                    "bullish",
+                ),
+            ),
+        )
+        analysis_id = store_market_analysis(self.database_path, analysis)
+        connection = initialize_database(self.database_path)
+        try:
+            connection.execute(
+                """
+                UPDATE market_analysis_commodity_directional_evidence
+                SET market_direction = 'neutral'
+                WHERE market_analysis_id = ?
+                """,
+                (analysis_id,),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        with self.assertRaises(ValueError):
+            get_recent_market_analysis(self.database_path, hours=1)
+
+    def test_rolls_back_parent_when_evidence_insertion_fails(self) -> None:
+        evidence = CommodityDirectionalEvidence(
+            "crude_oil",
+            "Crude Oil",
+            "bullish",
+        )
+        analysis = MarketAnalysis(
+            make_information(datetime.now(timezone.utc)),
+            "Inventory data was published.",
+            market_direction="bullish",
+            directional_provenance="direct_fundamental",
+            commodity_directional_evidence=(evidence,),
+        )
+        analysis.commodity_directional_evidence = (evidence, evidence)
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            store_market_analysis(self.database_path, analysis)
+
+        connection = initialize_database(self.database_path)
+        try:
+            information_count = connection.execute(
+                "SELECT COUNT(*) FROM market_information"
+            ).fetchone()[0]
+            analysis_count = connection.execute(
+                "SELECT COUNT(*) FROM market_analysis"
+            ).fetchone()[0]
+            evidence_count = connection.execute(
+                "SELECT COUNT(*) FROM "
+                "market_analysis_commodity_directional_evidence"
+            ).fetchone()[0]
+        finally:
+            connection.close()
+
+        self.assertEqual(
+            (information_count, analysis_count, evidence_count),
+            (0, 0, 0),
+        )
 
 
 if __name__ == "__main__":

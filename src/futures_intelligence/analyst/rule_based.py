@@ -23,6 +23,7 @@ from futures_intelligence.analyst.market_movement import (
 )
 from futures_intelligence.analyst.relative_value import RelativeValueDetector
 from futures_intelligence.models import (
+    CommodityDirectionalEvidence,
     DirectionalProvenance,
     MarketAnalysis,
     MarketInformation,
@@ -151,6 +152,10 @@ class RuleBasedAnalyst(BaseAnalyst):
             and relative_value_observations
         ):
             directional_provenance = "structural_only"
+        commodity_directional_evidence = _resolved_commodity_directional_evidence(
+            fundamental_signals,
+            directional_provenance,
+        )
         reasoning_details = [
             f"Source type: {item.source_type}; reliability score: {item.reliability_score}/5."
         ]
@@ -188,7 +193,36 @@ class RuleBasedAnalyst(BaseAnalyst):
             confidence_score=confidence_score,
             reasoning_details=tuple(reasoning_details),
             directional_provenance=directional_provenance,
+            commodity_directional_evidence=commodity_directional_evidence,
         )
+
+
+def _resolved_commodity_directional_evidence(
+    fundamental_signals: tuple[FundamentalSignal, ...],
+    provenance: DirectionalProvenance,
+) -> tuple[CommodityDirectionalEvidence, ...]:
+    """Preserve resolved Primary G3 directions from the final G3 decision path."""
+    if provenance not in {"direct_fundamental", "cross_commodity_abstention"}:
+        return ()
+
+    signals_by_commodity: dict[str, list[FundamentalSignal]] = {}
+    for signal in fundamental_signals:
+        signals_by_commodity.setdefault(signal.commodity_key, []).append(signal)
+
+    evidence: list[CommodityDirectionalEvidence] = []
+    for signals in signals_by_commodity.values():
+        directions = {signal.direction for signal in signals}
+        if len(directions) != 1:
+            continue
+        signal = signals[0]
+        evidence.append(
+            CommodityDirectionalEvidence(
+                commodity_key=signal.commodity_key,
+                commodity_label=signal.commodity_label,
+                market_direction=next(iter(directions)),
+            )
+        )
+    return tuple(evidence)
 
 def _commodity_labels(matches: tuple[CommodityMatch, ...]) -> tuple[str, ...]:
     """Return configured display labels from immutable matcher results."""

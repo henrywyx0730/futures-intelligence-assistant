@@ -49,6 +49,39 @@ _NEUTRAL_ONLY_PROVENANCES = frozenset(
         "structural_only",
     }
 )
+_COMMODITY_EVIDENCE_PROVENANCES = frozenset(
+    {"direct_fundamental", "cross_commodity_abstention"}
+)
+
+
+@dataclass(frozen=True)
+class CommodityDirectionalEvidence:
+    """One resolved direct-fundamental direction for a canonical commodity."""
+
+    commodity_key: str
+    commodity_label: str
+    market_direction: Literal["bullish", "bearish"]
+
+    def __post_init__(self) -> None:
+        """Fail closed for non-canonical or non-directional evidence values."""
+        if (
+            not isinstance(self.commodity_key, str)
+            or not self.commodity_key
+            or self.commodity_key != self.commodity_key.strip()
+            or self.commodity_key != self.commodity_key.lower()
+        ):
+            raise ValueError("commodity_key must be a canonical non-empty string")
+        if (
+            not isinstance(self.commodity_label, str)
+            or not self.commodity_label
+            or self.commodity_label != self.commodity_label.strip()
+        ):
+            raise ValueError("commodity_label must be a normalized non-empty string")
+        if (
+            not isinstance(self.market_direction, str)
+            or self.market_direction not in {"bullish", "bearish"}
+        ):
+            raise ValueError("commodity evidence direction must be bullish or bearish")
 
 
 @dataclass
@@ -61,6 +94,7 @@ class MarketAnalysis:
     confidence_score: int = 0
     reasoning_details: tuple[str, ...] = ()
     directional_provenance: DirectionalProvenance = "unspecified"
+    commodity_directional_evidence: tuple[CommodityDirectionalEvidence, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate the analysis source and normalize its summary."""
@@ -103,6 +137,11 @@ class MarketAnalysis:
             raise ValueError(
                 "direct_fundamental provenance requires bullish or bearish direction"
             )
+        _validate_commodity_directional_evidence(
+            self.commodity_directional_evidence,
+            self.directional_provenance,
+            self.market_direction,
+        )
 
 
 def _normalize_reasoning_details(values: tuple[str, ...]) -> tuple[str, ...]:
@@ -127,3 +166,42 @@ def _normalize_directional_provenance(value: object) -> DirectionalProvenance:
             f"{', '.join(sorted(VALID_DIRECTIONAL_PROVENANCES))}"
         )
     return cast(DirectionalProvenance, normalized)
+
+
+def _validate_commodity_directional_evidence(
+    values: tuple[CommodityDirectionalEvidence, ...],
+    provenance: DirectionalProvenance,
+    report_direction: str,
+) -> None:
+    """Validate immutable scoped evidence and its report-level compatibility."""
+    if type(values) is not tuple:
+        raise TypeError(
+            "commodity_directional_evidence must be a tuple of "
+            "CommodityDirectionalEvidence objects"
+        )
+    if not all(isinstance(value, CommodityDirectionalEvidence) for value in values):
+        raise TypeError(
+            "commodity_directional_evidence must be a tuple of "
+            "CommodityDirectionalEvidence objects"
+        )
+    commodity_keys = tuple(value.commodity_key for value in values)
+    if len(commodity_keys) != len(set(commodity_keys)):
+        raise ValueError("commodity directional evidence keys must be unique")
+    if not values:
+        return
+    if provenance not in _COMMODITY_EVIDENCE_PROVENANCES:
+        raise ValueError(
+            "commodity directional evidence requires direct_fundamental or "
+            "cross_commodity_abstention provenance"
+        )
+    directions = {value.market_direction for value in values}
+    if provenance == "direct_fundamental" and directions != {report_direction}:
+        raise ValueError(
+            "direct_fundamental commodity evidence must match report direction"
+        )
+    if provenance == "cross_commodity_abstention" and (
+        len(values) < 2 or directions != {"bullish", "bearish"}
+    ):
+        raise ValueError(
+            "cross_commodity_abstention evidence requires opposing commodity directions"
+        )
