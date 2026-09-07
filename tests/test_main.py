@@ -192,6 +192,11 @@ class MainTests(unittest.TestCase):
             _parse_arguments(["htfc-pdf-analysis-eval"]).command,
             "htfc-pdf-analysis-eval",
         )
+        try:
+            demo_command = _parse_arguments(["htfc-demo"]).command
+        except SystemExit as error:
+            self.fail(f"htfc-demo command is not registered: {error}")
+        self.assertEqual(demo_command, "htfc-demo")
 
         output = StringIO()
         with self.assertRaises(SystemExit), redirect_stdout(output):
@@ -203,6 +208,7 @@ class MainTests(unittest.TestCase):
         self.assertIn("htfc-pdf-collector-smoke-test", output.getvalue())
         self.assertIn("htfc-pdf-analysis-smoke-test", output.getvalue())
         self.assertIn("htfc-pdf-analysis-eval", output.getvalue())
+        self.assertIn("htfc-demo", output.getvalue())
 
     @patch(
         "futures_intelligence.main._run_htfc_pdf_collector_smoke_test",
@@ -233,6 +239,20 @@ class MainTests(unittest.TestCase):
     ) -> None:
         self.assertEqual(main(["htfc-pdf-analysis-eval"]), 1)
         evaluation.assert_called_once_with()
+
+    def test_main_dispatches_huatai_demo_command(self) -> None:
+        import futures_intelligence.main as main_module
+
+        runner = Mock(return_value=1)
+        with patch.object(main_module, "_run_htfc_demo", runner):
+            try:
+                exit_code = main(["htfc-demo"])
+            except SystemExit as error:
+                self.fail(f"htfc-demo command was not dispatched: {error}")
+
+        self.assertEqual(exit_code, 1)
+
+        runner.assert_called_once_with()
 
     def test_huatai_pdf_collector_smoke_test_uses_shared_one_item_collection_helper(
         self,
