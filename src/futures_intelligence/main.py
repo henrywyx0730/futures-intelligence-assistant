@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from futures_intelligence.analyst import (
     AnalystRouter,
@@ -22,10 +22,17 @@ from futures_intelligence.analyst.commodity_relevance import (
     CommodityRelevanceResolver,
 )
 from futures_intelligence.analyst.llm import _openai_client_for_smoke_test
-from futures_intelligence.collectors.research_report import ResearchReportCollector
 from futures_intelligence.collectors.factory import CollectorFactory
+from futures_intelligence.collectors.huatai_futures_pdf import (
+    HuataiFuturesPdfResearchReportCollector,
+)
+from futures_intelligence.collectors.research_report import ResearchReportCollector
 from futures_intelligence.config.loader import CONFIGURATION_FILES, load_yaml_file
-from futures_intelligence.demo import HuataiDemoError, format_htfc_demo
+from futures_intelligence.demo import (
+    HuataiDemoError,
+    format_htfc_demo,
+    select_htfc_demo_pdf_items,
+)
 from futures_intelligence.fetchers import (
     HuataiFuturesReportFetcher,
     HuataiPdfAttachment,
@@ -366,7 +373,7 @@ def _run_htfc_pdf_analysis_evaluation() -> int:
 def _run_htfc_demo() -> int:
     """Run the bounded Huatai collection path and print a deterministic demo."""
     try:
-        collected_information = _collect_bounded_htfc_pdf_market_information(
+        collected_information = _collect_commodity_focused_htfc_demo_information(
             HTFC_PDF_ANALYSIS_EVALUATION_LIMIT
         )
     except OSError as error:
@@ -402,6 +409,20 @@ def _run_htfc_demo() -> int:
     return 0
 
 
+def _collect_commodity_focused_htfc_demo_information(
+    max_selected_pdfs: int,
+) -> list[MarketInformation]:
+    """Select title-explicit reports before the bounded PDF processing boundary."""
+    collector = _configured_htfc_pdf_collector(max_selected_pdfs)
+    ordered_items = collector.discover_pdf_items()
+    selected_items = select_htfc_demo_pdf_items(
+        ordered_items,
+        maximum_items=max_selected_pdfs,
+    )
+    information = collector.collect_selected_pdf_items(selected_items)
+    return _validated_htfc_pdf_market_information(information)
+
+
 def _collect_one_htfc_pdf_market_information() -> MarketInformation:
     """Collect exactly one normalized Huatai PDF item using detached configuration."""
     information = _collect_bounded_htfc_pdf_market_information(1)
@@ -418,6 +439,14 @@ def _collect_bounded_htfc_pdf_market_information(
     max_selected_pdfs: int,
 ) -> list[MarketInformation]:
     """Collect a validated bounded Huatai PDF batch using detached configuration."""
+    collector = _configured_htfc_pdf_collector(max_selected_pdfs)
+    return _validated_htfc_pdf_market_information(collector.collect())
+
+
+def _configured_htfc_pdf_collector(
+    max_selected_pdfs: int,
+) -> HuataiFuturesPdfResearchReportCollector:
+    """Create the detached bounded Huatai PDF collector without running it."""
     if (
         isinstance(max_selected_pdfs, bool)
         or not isinstance(max_selected_pdfs, int)
@@ -434,7 +463,13 @@ def _collect_bounded_htfc_pdf_market_information(
     if collector is None:
         raise _HuataiSmokeTestFailure("factory did not create a collector.")
 
-    information = collector.collect()
+    return cast(HuataiFuturesPdfResearchReportCollector, collector)
+
+
+def _validated_htfc_pdf_market_information(
+    information: object,
+) -> list[MarketInformation]:
+    """Validate one collector result without changing its order or identities."""
     if not isinstance(information, list):
         raise _HuataiSmokeTestFailure("collector did not return a list of MarketInformation.")
     if not all(isinstance(item, MarketInformation) for item in information):

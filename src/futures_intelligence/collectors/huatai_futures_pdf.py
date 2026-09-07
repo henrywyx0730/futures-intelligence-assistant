@@ -97,6 +97,34 @@ class HuataiFuturesPdfResearchReportCollector(BaseCollector):
             logger.info("Huatai Futures PDF collector found no accepted PDF attachments.")
             return []
 
+        return self.collect_selected_pdf_items(selected)
+
+    def discover_pdf_items(self) -> tuple[HuataiReportListingItem, ...]:
+        """Return all unique accepted PDF items in normal deterministic order."""
+        discovery = self._listing_fetcher.discover_listing()
+        ordered, _, _ = self._ordered_pdf_items(discovery)
+        return ordered
+
+    def collect_selected_pdf_items(
+        self,
+        selected: tuple[HuataiReportListingItem, ...],
+    ) -> list[MarketInformation]:
+        """Extract and normalize one explicitly selected bounded PDF item tuple."""
+        if type(selected) is not tuple or not all(
+            isinstance(item, HuataiReportListingItem) for item in selected
+        ):
+            raise ValueError("selected PDF items must be a Huatai listing item tuple")
+        if len(selected) > self._max_selected_pdfs:
+            raise ValueError("selected PDF items exceed max_selected_pdfs")
+        if len({item.canonical_url for item in selected}) != len(selected):
+            raise ValueError("selected PDF items must have unique canonical URLs")
+        if any(
+            item.link_kind != "pdf_attachment"
+            or not _is_usable_pdf_url(item.canonical_url)
+            for item in selected
+        ):
+            raise ValueError("selected PDF items must be accepted Huatai PDF attachments")
+
         information: list[MarketInformation] = []
         for item in selected:
             attachment = HuataiPdfAttachment(
@@ -140,6 +168,18 @@ class HuataiFuturesPdfResearchReportCollector(BaseCollector):
         discovery: HuataiListingDiscovery,
     ) -> tuple[tuple[HuataiReportListingItem, ...], int, int]:
         """Return unique, newest-first PDF listing items with stable tie-breaking."""
+        ordered, unique_count, duplicate_count = self._ordered_pdf_items(discovery)
+        return (
+            ordered[: self._max_selected_pdfs],
+            unique_count,
+            duplicate_count,
+        )
+
+    def _ordered_pdf_items(
+        self,
+        discovery: HuataiListingDiscovery,
+    ) -> tuple[tuple[HuataiReportListingItem, ...], int, int]:
+        """Return every unique valid PDF item in the collector's stable order."""
         unique: list[tuple[int, HuataiReportListingItem]] = []
         seen_urls: set[str] = set()
         duplicate_count = 0
@@ -156,7 +196,7 @@ class HuataiFuturesPdfResearchReportCollector(BaseCollector):
 
         ordered = sorted(unique, key=_pdf_selection_key)
         return (
-            tuple(item for _, item in ordered[: self._max_selected_pdfs]),
+            tuple(item for _, item in ordered),
             len(unique),
             duplicate_count,
         )

@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from futures_intelligence.analyst import (
     AggregatedMarketView,
     CommodityMarketView,
     MarketAnalysisAggregator,
 )
+from futures_intelligence.analyst.commodity_matcher import CommodityMatcher
 from futures_intelligence.analyst.commodity_relevance import (
     CommodityRelevanceAssessment,
 )
+from futures_intelligence.fetchers import HuataiReportListingItem
 from futures_intelligence.models import MarketAnalysis, MarketInformation
 
 
@@ -19,10 +23,73 @@ MAX_PRESENTATION_CHARACTERS = 240
 MAX_REASONING_DETAILS = 3
 _MAJOR_SEPARATOR = "=" * 60
 _SECTION_SEPARATOR = "-" * 60
+_TITLE_MATCH_TIMESTAMP = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_DIRECTION_LABELS = {
+    "bullish": "偏多 (bullish)",
+    "bearish": "偏空 (bearish)",
+    "neutral": "中性 (neutral)",
+}
+DEMO_SAMPLING_DESCRIPTION = (
+    "选样规则：优先选择标题明确命中已跟踪品种的华泰报告，"
+    "不足 3 篇时按最新报告补足。"
+)
 
 
 class HuataiDemoError(ValueError):
     """Raised when bounded evaluated inputs cannot form a truthful demo."""
+
+
+def select_htfc_demo_pdf_items(
+    items: tuple[HuataiReportListingItem, ...],
+    *,
+    matcher: CommodityMatcher | None = None,
+    maximum_items: int = HTFC_DEMO_REPORT_LIMIT,
+) -> tuple[HuataiReportListingItem, ...]:
+    """Prioritize title-matched PDFs before stable broader-report fallback."""
+    if type(items) is not tuple or not all(
+        isinstance(item, HuataiReportListingItem) for item in items
+    ):
+        raise HuataiDemoError("demo PDF candidates must be a Huatai listing item tuple")
+    if (
+        isinstance(maximum_items, bool)
+        or not isinstance(maximum_items, int)
+        or maximum_items < 1
+        or maximum_items > HTFC_DEMO_REPORT_LIMIT
+    ):
+        raise HuataiDemoError("demo PDF selection limit must be between 1 and 3")
+
+    resolved_matcher = matcher if matcher is not None else CommodityMatcher()
+    relevant: list[HuataiReportListingItem] = []
+    broader: list[HuataiReportListingItem] = []
+    seen_urls: set[str] = set()
+    for item in items:
+        if item.canonical_url in seen_urls:
+            continue
+        seen_urls.add(item.canonical_url)
+        target = (
+            relevant
+            if _listing_title_has_commodity(item, resolved_matcher)
+            else broader
+        )
+        target.append(item)
+    return tuple((relevant + broader)[:maximum_items])
+
+
+def _listing_title_has_commodity(
+    item: HuataiReportListingItem,
+    matcher: CommodityMatcher,
+) -> bool:
+    """Use the canonical article matcher with title-only listing metadata."""
+    probe = MarketInformation(
+        title=item.listing_title,
+        source="Huatai Futures listing",
+        source_type="research_report",
+        published_time=_TITLE_MATCH_TIMESTAMP,
+        content=".",
+        reliability_score=1,
+    )
+    evidence = matcher.match_with_evidence(probe)
+    return any(occurrence.field == "title" for occurrence in evidence.occurrences)
 
 
 def format_htfc_demo(
@@ -38,10 +105,11 @@ def format_htfc_demo(
 
     lines = [
         _MAJOR_SEPARATOR,
-        "FUTURES INTELLIGENCE DEMO",
+        "期货情报 DEMO",
         _MAJOR_SEPARATOR,
         "",
-        f"Huatai reports collected: {len(information)}",
+        f"已选华泰报告：{len(information)}",
+        DEMO_SAMPLING_DESCRIPTION,
     ]
     for index, (item, analysis, assessment) in enumerate(
         zip(information, analyses, relevance),
@@ -49,12 +117,12 @@ def format_htfc_demo(
     ):
         lines.extend(_format_report(index, item, analysis, assessment))
 
-    lines.extend(["", _SECTION_SEPARATOR, "COMMODITY VIEW", _SECTION_SEPARATOR])
+    lines.extend(["", _SECTION_SEPARATOR, "品种视图", _SECTION_SEPARATOR])
     if commodity_views:
         for view in commodity_views:
             lines.extend(_format_commodity_view(view))
     else:
-        lines.append("No Primary commodity views were resolved.")
+        lines.append("本次所选报告未形成明确的 Primary 品种视图。")
 
     lines.extend(_format_global_view(global_view))
     lines.extend(_format_demo_brief(commodity_views, global_view))
@@ -62,8 +130,8 @@ def format_htfc_demo(
         [
             "",
             (
-                f"Demo complete: {len(analyses)} reports analyzed, "
-                f"{len(commodity_views)} commodity views generated."
+                f"Demo 完成：已分析 {len(analyses)} 篇报告，"
+                f"生成 {len(commodity_views)} 个品种视图。"
             ),
         ]
     )
@@ -118,25 +186,25 @@ def _format_report(
     primary_labels = tuple(entry.commodity_label for entry in relevance.primary)
     lines = [
         "",
-        f"REPORT {index}",
-        f"Title: {_bounded_text(item.title, MAX_TITLE_CHARACTERS)}",
-        f"Published: {item.published_time.isoformat()}",
-        f"Source: {_bounded_text(item.source, MAX_PRESENTATION_CHARACTERS)}",
-        f"Primary commodities: {', '.join(primary_labels) or 'none'}",
-        f"Summary: {_bounded_text(analysis.summary, MAX_PRESENTATION_CHARACTERS)}",
-        f"Report direction: {analysis.market_direction}",
-        f"Confidence: {analysis.confidence_score}/100",
-        f"Directional provenance: {analysis.directional_provenance}",
-        "Commodity-scoped direction:",
+        f"报告 {index}",
+        f"标题：{_bounded_text(item.title, MAX_TITLE_CHARACTERS)}",
+        f"发布日期：{item.published_time.isoformat()}",
+        f"来源：{_bounded_text(item.source, MAX_PRESENTATION_CHARACTERS)}",
+        f"主要品种：{', '.join(primary_labels) or '未识别到明确 Primary 品种'}",
+        f"摘要：{_bounded_text(analysis.summary, MAX_PRESENTATION_CHARACTERS)}",
+        f"报告方向：{_direction_label(analysis.market_direction)}",
+        f"方向置信度：{analysis.confidence_score}/100",
+        f"判定依据：{analysis.directional_provenance}",
+        "品种级方向：",
     ]
     if analysis.commodity_directional_evidence:
         lines.extend(
-            f"- {evidence.commodity_label}: {evidence.market_direction}"
+            f"- {evidence.commodity_label}：{_direction_label(evidence.market_direction)}"
             for evidence in analysis.commodity_directional_evidence
         )
     else:
-        lines.append("- none resolved")
-    lines.append("Reasoning:")
+        lines.append("- 未解析出品种级方向")
+    lines.append("核心依据：")
     lines.extend(_bounded_reasoning(analysis.reasoning_details))
     return lines
 
@@ -146,10 +214,10 @@ def _format_commodity_view(view: CommodityMarketView) -> list[str]:
     return [
         "",
         view.commodity_label,
-        f"Direction: {view.overall_direction}",
-        f"Confidence: {view.confidence_score}/100",
-        f"Reports: {view.analysis_count}",
-        "Key reasoning:",
+        f"方向：{_direction_label(view.overall_direction)}",
+        f"聚合方向置信度：{view.confidence_score}/100",
+        f"报告数：{view.analysis_count}",
+        "核心依据：",
         *_bounded_reasoning(view.reasoning_details),
     ]
 
@@ -159,12 +227,12 @@ def _format_global_view(view: AggregatedMarketView) -> list[str]:
     return [
         "",
         _SECTION_SEPARATOR,
-        "MARKET OVERVIEW",
+        "市场概览",
         _SECTION_SEPARATOR,
-        f"Global direction: {view.overall_market_direction}",
-        f"Global confidence: {view.aggregated_confidence_score}/100",
-        f"Reports analyzed: {view.analysis_count}",
-        "Key context:",
+        f"市场整体方向：{_direction_label(view.overall_market_direction)}",
+        f"聚合方向置信度：{view.aggregated_confidence_score}/100",
+        f"分析报告数：{view.analysis_count}",
+        "核心背景：",
         *_bounded_reasoning(view.reasoning_details),
     ]
 
@@ -174,27 +242,35 @@ def _format_demo_brief(
     global_view: AggregatedMarketView,
 ) -> list[str]:
     """Format a compact deterministic commodity-first demo summary."""
-    lines = ["", _SECTION_SEPARATOR, "DEMO BRIEF", _SECTION_SEPARATOR]
+    lines = ["", _SECTION_SEPARATOR, "早间视图 / DEMO BRIEF", _SECTION_SEPARATOR]
     if commodity_views:
         lines.extend(
             _bounded_bullet(
-                f"{view.commodity_label} — {view.overall_direction} "
-                f"({view.confidence_score}/100, {view.analysis_count} "
-                f"{'report' if view.analysis_count == 1 else 'reports'})"
+                f"{view.commodity_label} — {_direction_label(view.overall_direction)}，"
+                f"聚合方向置信度 {view.confidence_score}/100，"
+                f"{view.analysis_count} 篇报告"
             )
             for view in commodity_views
         )
     else:
-        lines.append("- No Primary commodity views were resolved.")
+        lines.append("- 本次所选报告未形成明确的 Primary 品种视图。")
     lines.append(
         _bounded_text(
-            "Market-wide view: "
-            f"{global_view.overall_market_direction} "
-            f"({global_view.aggregated_confidence_score}/100)",
+            "市场整体："
+            f"{_direction_label(global_view.overall_market_direction)}，"
+            f"聚合方向置信度 {global_view.aggregated_confidence_score}/100",
             MAX_PRESENTATION_CHARACTERS,
         )
     )
     return lines
+
+
+def _direction_label(direction: str) -> str:
+    """Return one presentation-only bilingual direction label."""
+    try:
+        return _DIRECTION_LABELS[direction]
+    except KeyError as error:
+        raise HuataiDemoError("demo received an unsupported market direction") from error
 
 
 def _bounded_reasoning(details: tuple[str, ...]) -> list[str]:

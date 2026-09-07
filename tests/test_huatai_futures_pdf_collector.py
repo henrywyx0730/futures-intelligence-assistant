@@ -175,6 +175,70 @@ class HuataiFuturesPdfResearchReportCollectorTests(unittest.TestCase):
         self.assertEqual(information[0].metadata["document_metadata_author"], "FreeUser")
         self.assertEqual(information[0].metadata["published_time_precision"], "date")
 
+    def test_discovers_all_ordered_pdf_items_without_extracting(self) -> None:
+        older = _listing_item(
+            "https://htfc.com/wz_upload/older.pdf",
+            publication_date=date(2026, 7, 24),
+        )
+        newest = _listing_item(
+            "https://htfc.com/wz_upload/newest.pdf",
+            publication_date=date(2026, 7, 26),
+        )
+        collector, listing_fetcher, extractor = self._collector(
+            (older, newest),
+            {
+                older.canonical_url: _extraction_result(older),
+                newest.canonical_url: _extraction_result(newest),
+            },
+            max_selected_pdfs=1,
+        )
+        discover = getattr(collector, "discover_pdf_items", None)
+        self.assertTrue(callable(discover))
+
+        ordered = discover()
+
+        self.assertEqual(ordered, (newest, older))
+        self.assertEqual(listing_fetcher.calls, 1)
+        self.assertEqual(extractor.urls, [])
+
+    def test_processes_only_explicit_selected_items_without_rediscovery(self) -> None:
+        first = _listing_item("https://htfc.com/wz_upload/first.pdf", item_position=0)
+        second = _listing_item("https://htfc.com/wz_upload/second.pdf", item_position=1)
+        collector, listing_fetcher, extractor = self._collector(
+            (first, second),
+            {
+                first.canonical_url: _extraction_result(first),
+                second.canonical_url: _extraction_result(second),
+            },
+            max_selected_pdfs=1,
+        )
+        collect_selected = getattr(collector, "collect_selected_pdf_items", None)
+        self.assertTrue(callable(collect_selected))
+
+        information = collect_selected((second,))
+
+        self.assertEqual(listing_fetcher.calls, 0)
+        self.assertEqual(extractor.urls, [second.canonical_url])
+        self.assertEqual([item.url for item in information], [second.canonical_url])
+
+    def test_rejects_explicit_selection_above_the_configured_pdf_bound(self) -> None:
+        first = _listing_item("https://htfc.com/wz_upload/first.pdf", item_position=0)
+        second = _listing_item("https://htfc.com/wz_upload/second.pdf", item_position=1)
+        collector, listing_fetcher, extractor = self._collector(
+            (first, second),
+            {
+                first.canonical_url: _extraction_result(first),
+                second.canonical_url: _extraction_result(second),
+            },
+            max_selected_pdfs=1,
+        )
+
+        with self.assertRaisesRegex(ValueError, "exceed max_selected_pdfs"):
+            collector.collect_selected_pdf_items((first, second))
+
+        self.assertEqual(listing_fetcher.calls, 0)
+        self.assertEqual(extractor.urls, [])
+
     def test_deduplicates_urls_before_selection_and_keeps_first_listing_record(self) -> None:
         first = _listing_item("https://htfc.com/wz_upload/duplicate.pdf", item_position=0)
         duplicate = _listing_item(

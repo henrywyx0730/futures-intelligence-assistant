@@ -1,17 +1,22 @@
 """Tests for the bounded, deterministic Huatai presentation command."""
 
 from contextlib import redirect_stdout
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from io import StringIO
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from futures_intelligence.analyst.commodity_relevance import (
     CommodityRelevanceAssessment,
     CommodityRelevanceResolver,
 )
 from futures_intelligence.analyst.rule_based import RuleBasedAnalyst
+import futures_intelligence.demo as demo_module
 from futures_intelligence.demo import HuataiDemoError, format_htfc_demo
+from futures_intelligence.fetchers import (
+    HuataiListingDiscovery,
+    HuataiReportListingItem,
+)
 from futures_intelligence.models import MarketAnalysis, MarketInformation
 from futures_intelligence.processing.ranker import InformationRanker
 
@@ -64,51 +69,100 @@ def evaluate_demo_reports(
     return ranked, analyses, relevance
 
 
+def make_listing_item(
+    position: int,
+    title: str,
+    *,
+    url: str | None = None,
+) -> HuataiReportListingItem:
+    """Create one already ordered Huatai PDF listing item."""
+    return HuataiReportListingItem(
+        canonical_url=url or f"https://htfc.com/wz_upload/report-{position}.pdf",
+        link_kind="pdf_attachment",
+        listing_title=title,
+        publication_date=date(2026, 9, 7),
+        report_type="专题报告",
+        section_position=0,
+        item_position=position,
+    )
+
+
 class HuataiDemoTests(unittest.TestCase):
     """Validate the offline demo while faking only Huatai acquisition."""
 
     def test_formats_real_deterministic_analysis_and_aggregation(self) -> None:
         reports = synthetic_demo_reports()
         evaluated = evaluate_demo_reports(reports)
+        original_directions = tuple(
+            analysis.market_direction for analysis in evaluated[1]
+        )
+        original_scoped_directions = tuple(
+            tuple(
+                evidence.market_direction
+                for evidence in analysis.commodity_directional_evidence
+            )
+            for analysis in evaluated[1]
+        )
 
         output = format_htfc_demo(*evaluated)
 
-        self.assertIn("FUTURES INTELLIGENCE DEMO", output)
-        self.assertIn("Huatai reports collected: 3", output)
-        self.assertEqual(output.count("REPORT "), 3)
-        self.assertIn("Title: 原油专题", output)
-        self.assertIn("Title: 燃料油专题", output)
-        self.assertIn("Title: 原油与燃料油专题", output)
-        self.assertIn("Published: 2026-07-27T00:00:00+00:00", output)
-        self.assertIn("Source: Huatai Futures", output)
-        self.assertIn("Primary commodities: Crude Oil", output)
-        self.assertIn("Primary commodities: Fuel Oil", output)
-        self.assertIn("Report direction: bullish", output)
-        self.assertIn("Report direction: bearish", output)
-        self.assertIn("Report direction: neutral", output)
-        self.assertIn("Directional provenance: direct_fundamental", output)
-        self.assertIn("Directional provenance: cross_commodity_abstention", output)
-        self.assertIn("- Crude Oil: bullish", output)
-        self.assertIn("- Fuel Oil: bearish", output)
+        self.assertIn("期货情报 DEMO", output)
+        self.assertIn("已选华泰报告：3", output)
+        self.assertIn("选样规则：优先选择标题明确命中已跟踪品种的华泰报告", output)
+        self.assertEqual(output.count("\n报告 "), 3)
+        self.assertIn("标题：原油专题", output)
+        self.assertIn("标题：燃料油专题", output)
+        self.assertIn("标题：原油与燃料油专题", output)
+        self.assertIn("发布日期：2026-07-27T00:00:00+00:00", output)
+        self.assertIn("来源：Huatai Futures", output)
+        self.assertIn("主要品种：Crude Oil", output)
+        self.assertIn("主要品种：Fuel Oil", output)
+        self.assertIn("报告方向：偏多 (bullish)", output)
+        self.assertIn("报告方向：偏空 (bearish)", output)
+        self.assertIn("报告方向：中性 (neutral)", output)
+        self.assertIn("判定依据：direct_fundamental", output)
+        self.assertIn("判定依据：cross_commodity_abstention", output)
+        self.assertIn("- Crude Oil：偏多 (bullish)", output)
+        self.assertIn("- Fuel Oil：偏空 (bearish)", output)
         self.assertIn(
-            "Crude Oil\nDirection: bullish\nConfidence: 67/100\nReports: 2",
+            "Crude Oil\n方向：偏多 (bullish)\n聚合方向置信度：67/100\n报告数：2",
             output,
         )
         self.assertIn(
-            "Fuel Oil\nDirection: bearish\nConfidence: 67/100\nReports: 2",
+            "Fuel Oil\n方向：偏空 (bearish)\n聚合方向置信度：67/100\n报告数：2",
             output,
         )
         self.assertIn(
-            "Global direction: neutral\nGlobal confidence: 70/100\nReports analyzed: 3",
+            "市场整体方向：中性 (neutral)\n聚合方向置信度：70/100\n分析报告数：3",
             output,
         )
-        self.assertIn("DEMO BRIEF", output)
-        self.assertIn("- Crude Oil — bullish (67/100, 2 reports)", output)
-        self.assertIn("- Fuel Oil — bearish (67/100, 2 reports)", output)
-        self.assertIn("Market-wide view: neutral (70/100)", output)
+        self.assertIn("早间视图 / DEMO BRIEF", output)
         self.assertIn(
-            "Demo complete: 3 reports analyzed, 2 commodity views generated.",
+            "- Crude Oil — 偏多 (bullish)，聚合方向置信度 67/100，2 篇报告",
             output,
+        )
+        self.assertIn(
+            "- Fuel Oil — 偏空 (bearish)，聚合方向置信度 67/100，2 篇报告",
+            output,
+        )
+        self.assertIn("市场整体：中性 (neutral)，聚合方向置信度 70/100", output)
+        self.assertIn(
+            "Demo 完成：已分析 3 篇报告，生成 2 个品种视图。",
+            output,
+        )
+        self.assertEqual(
+            tuple(analysis.market_direction for analysis in evaluated[1]),
+            original_directions,
+        )
+        self.assertEqual(
+            tuple(
+                tuple(
+                    evidence.market_direction
+                    for evidence in analysis.commodity_directional_evidence
+                )
+                for analysis in evaluated[1]
+            ),
+            original_scoped_directions,
         )
         self.assertTrue(all(report.commodities == () for report in reports))
         self.assertNotIn("REPORT_BODY_SECRET", output)
@@ -123,9 +177,9 @@ class HuataiDemoTests(unittest.TestCase):
         output = format_htfc_demo(*evaluated)
 
         title_line = next(
-            line for line in output.splitlines() if line.startswith("Title: ")
+            line for line in output.splitlines() if line.startswith("标题：")
         )
-        self.assertLessEqual(len(title_line.removeprefix("Title: ")), 300)
+        self.assertLessEqual(len(title_line.removeprefix("标题：")), 300)
         reasoning_lines = [
             line for line in output.splitlines() if line.startswith("- ")
         ]
@@ -142,10 +196,129 @@ class HuataiDemoTests(unittest.TestCase):
 
         output = format_htfc_demo(*evaluate_demo_reports([report]))
 
-        self.assertIn("Report direction: neutral", output)
-        self.assertIn("Directional provenance: qualified_only", output)
-        self.assertIn("Commodity-scoped direction:\n- none resolved", output)
+        self.assertIn("报告方向：中性 (neutral)", output)
+        self.assertIn("判定依据：qualified_only", output)
+        self.assertIn("品种级方向：\n- 未解析出品种级方向", output)
         self.assertNotIn("REPORT_BODY_SECRET_QUALIFIED", output)
+
+    def test_formats_zero_commodity_neutral_result_as_an_intentional_state(self) -> None:
+        reports = [
+            make_demo_information(f"宏观跟踪 {index}", "政策信息保持稳定。")
+            for index in range(3)
+        ]
+
+        output = format_htfc_demo(*evaluate_demo_reports(reports))
+
+        self.assertIn("本次所选报告未形成明确的 Primary 品种视图。", output)
+        self.assertIn("市场整体方向：中性 (neutral)", output)
+        self.assertIn("聚合方向置信度：0/100", output)
+        self.assertIn("分析报告数：3", output)
+        self.assertIn("Demo 完成：已分析 3 篇报告，生成 0 个品种视图。", output)
+
+    def test_selects_canonical_commodity_titles_before_broader_reports(self) -> None:
+        selector = getattr(demo_module, "select_htfc_demo_pdf_items", None)
+        self.assertTrue(callable(selector))
+        items = (
+            make_listing_item(0, "华泰期货宏观政策跟踪"),
+            make_listing_item(
+                1,
+                "华泰期货黑色专题报告20260906：成本推升与复产博弈，关注煤炭价格对成本影响",
+            ),
+            make_listing_item(2, "华泰期货宏观数据跟踪"),
+            make_listing_item(3, "华泰期货原油专题报告"),
+            make_listing_item(4, "华泰期货燃料油专题报告"),
+            make_listing_item(5, "华泰期货白银专题报告"),
+        )
+
+        discovery = HuataiListingDiscovery(
+            report_items=items,
+            recognized_report_section_count=3,
+            recognized_report_list_count=3,
+        )
+        with (
+            patch(
+                "futures_intelligence.demo.MarketAnalysisAggregator",
+                side_effect=AssertionError("selection must not aggregate"),
+            ) as aggregator,
+            patch(
+                "futures_intelligence.analyst.rule_based.RuleBasedAnalyst",
+                side_effect=AssertionError("selection must not analyze"),
+            ) as analyst,
+        ):
+            selected = selector(discovery.report_items)
+
+        self.assertEqual(selected, items[3:6])
+        aggregator.assert_not_called()
+        analyst.assert_not_called()
+
+    def test_selection_fills_with_newest_broader_titles_without_duplicates(self) -> None:
+        selector = getattr(demo_module, "select_htfc_demo_pdf_items", None)
+        self.assertTrue(callable(selector))
+        relevant = make_listing_item(1, "华泰期货原油专题报告")
+        items = (
+            make_listing_item(0, "华泰期货宏观政策跟踪"),
+            relevant,
+            make_listing_item(2, "华泰期货宏观数据跟踪"),
+            make_listing_item(3, "华泰期货行业观察"),
+            make_listing_item(4, "重复记录", url=relevant.canonical_url),
+        )
+
+        selected = selector(items)
+
+        self.assertEqual(selected, (relevant, items[0], items[2]))
+        self.assertEqual(len({item.canonical_url for item in selected}), 3)
+
+    def test_selection_falls_back_to_first_three_when_no_title_is_relevant(self) -> None:
+        selector = getattr(demo_module, "select_htfc_demo_pdf_items", None)
+        self.assertTrue(callable(selector))
+        items = tuple(
+            make_listing_item(index, f"华泰期货宏观跟踪 {index}")
+            for index in range(5)
+        )
+
+        self.assertEqual(selector(items), items[:3])
+
+    def test_selection_caps_relevant_titles_before_pdf_processing(self) -> None:
+        selector = getattr(demo_module, "select_htfc_demo_pdf_items", None)
+        self.assertTrue(callable(selector))
+        items = tuple(
+            make_listing_item(index, f"华泰期货原油专题报告 {index}")
+            for index in range(10)
+        )
+
+        self.assertEqual(selector(items), items[:3])
+
+    def test_demo_acquisition_processes_only_the_selected_listing_items(self) -> None:
+        import futures_intelligence.main as main_module
+
+        collector = Mock()
+        items = (
+            make_listing_item(0, "华泰期货宏观政策跟踪"),
+            make_listing_item(1, "华泰期货宏观数据跟踪"),
+            make_listing_item(2, "华泰期货行业观察"),
+            make_listing_item(3, "华泰期货原油专题报告"),
+            make_listing_item(4, "华泰期货燃料油专题报告"),
+            make_listing_item(5, "华泰期货白银专题报告"),
+        )
+        reports = synthetic_demo_reports()
+        collector.discover_pdf_items.return_value = items
+        collector.collect_selected_pdf_items.return_value = reports
+        helper = getattr(
+            main_module,
+            "_collect_commodity_focused_htfc_demo_information",
+            None,
+        )
+        self.assertTrue(callable(helper))
+
+        with patch(
+            "futures_intelligence.main._configured_htfc_pdf_collector",
+            return_value=collector,
+        ):
+            result = helper(3)
+
+        self.assertIs(result, reports)
+        collector.discover_pdf_items.assert_called_once_with()
+        collector.collect_selected_pdf_items.assert_called_once_with(items[3:6])
 
     def test_rejects_empty_or_over_limit_report_batches(self) -> None:
         with self.assertRaisesRegex(HuataiDemoError, "no Huatai research reports"):
@@ -169,7 +342,7 @@ class HuataiDemoTests(unittest.TestCase):
 
         with (
             patch(
-                "futures_intelligence.main._collect_bounded_htfc_pdf_market_information",
+                "futures_intelligence.main._collect_commodity_focused_htfc_demo_information",
                 return_value=reports,
             ) as collect,
             patch(
@@ -198,7 +371,7 @@ class HuataiDemoTests(unittest.TestCase):
         llm_constructor.assert_not_called()
         openai_client_factory.assert_not_called()
         service.assert_not_called()
-        self.assertIn("Demo complete: 3 reports analyzed", output.getvalue())
+        self.assertIn("Demo 完成：已分析 3 篇报告", output.getvalue())
 
     def test_command_reports_expected_failures_and_propagates_unexpected_errors(
         self,
@@ -215,7 +388,7 @@ class HuataiDemoTests(unittest.TestCase):
             with self.subTest(expected=expected):
                 output = StringIO()
                 patcher = patch(
-                    "futures_intelligence.main._collect_bounded_htfc_pdf_market_information",
+                    "futures_intelligence.main._collect_commodity_focused_htfc_demo_information",
                     side_effect=result if isinstance(result, Exception) else None,
                     return_value=result if isinstance(result, list) else None,
                 )
@@ -226,7 +399,7 @@ class HuataiDemoTests(unittest.TestCase):
 
         expected_error = KeyError("unexpected demo failure")
         with patch(
-            "futures_intelligence.main._collect_bounded_htfc_pdf_market_information",
+            "futures_intelligence.main._collect_commodity_focused_htfc_demo_information",
             side_effect=expected_error,
         ):
             with self.assertRaises(KeyError) as captured:
