@@ -10,7 +10,11 @@ from futures_intelligence.analyst.commodity_matcher import (
     CommodityMatcher,
 )
 from futures_intelligence.analyst.commodity_relevance import CommodityRelevanceResolver
-from futures_intelligence.models import MarketAnalysis, MarketInformation
+from futures_intelligence.models import (
+    CommodityDirectionalEvidence,
+    MarketAnalysis,
+    MarketInformation,
+)
 
 
 def make_analysis(
@@ -23,6 +27,7 @@ def make_analysis(
     content: str = "Test content.",
     commodities: tuple[str, ...] = (),
     directional_provenance: str = "unspecified",
+    commodity_directional_evidence: tuple[CommodityDirectionalEvidence, ...] = (),
 ) -> MarketAnalysis:
     """Create an analysis with the requested aggregate inputs."""
     information = MarketInformation(
@@ -41,6 +46,7 @@ def make_analysis(
         confidence_score=confidence_score,
         reasoning_details=reasoning_details,
         directional_provenance=directional_provenance,
+        commodity_directional_evidence=commodity_directional_evidence,
     )
 
 
@@ -330,6 +336,260 @@ class MarketAnalysisAggregatorTests(unittest.TestCase):
         )
         self.assertEqual(tuple(view.analysis_count for view in views), (1, 1))
 
+    def test_scoped_fundamentals_diverge_by_commodity_without_changing_global_view(
+        self,
+    ) -> None:
+        analysis = make_research_analysis(
+            "原油与燃料油专题",
+            "原油供应收紧；燃料油供应宽松。",
+        )
+
+        global_view = self.aggregator.aggregate([analysis])
+        views = {
+            view.commodity_key: view
+            for view in self.aggregator.aggregate_by_commodity([analysis])
+        }
+
+        self.assertEqual(analysis.market_direction, "neutral")
+        self.assertEqual(analysis.confidence_score, 60)
+        self.assertEqual(
+            analysis.directional_provenance,
+            "cross_commodity_abstention",
+        )
+        self.assertEqual(
+            tuple(
+                (
+                    evidence.commodity_key,
+                    evidence.commodity_label,
+                    evidence.market_direction,
+                )
+                for evidence in analysis.commodity_directional_evidence
+            ),
+            (
+                ("crude_oil", "Crude Oil", "bullish"),
+                ("fuel_oil", "Fuel Oil", "bearish"),
+            ),
+        )
+        self.assertEqual(global_view.overall_market_direction, "neutral")
+        self.assertEqual(global_view.aggregated_confidence_score, 60)
+        self.assertEqual(global_view.analysis_count, 1)
+        self.assertEqual(
+            global_view.reasoning_details,
+            (
+                "Source type: research_report; reliability score: 3/5.",
+                "Primary commodity focus: Crude Oil, Fuel Oil.",
+                "Opposing direct fundamentals concern different primary commodities; "
+                "no single report-level direction was assigned.",
+            ),
+        )
+        self.assertEqual(views["crude_oil"].overall_direction, "bullish")
+        self.assertEqual(views["crude_oil"].confidence_score, 60)
+        self.assertEqual(views["crude_oil"].analysis_count, 1)
+        self.assertEqual(views["fuel_oil"].overall_direction, "bearish")
+        self.assertEqual(views["fuel_oil"].confidence_score, 60)
+        self.assertEqual(views["fuel_oil"].analysis_count, 1)
+        for view in views.values():
+            self.assertIn(
+                "Opposing direct fundamentals concern different primary commodities; "
+                "no single report-level direction was assigned.",
+                view.reasoning_details,
+            )
+        self.assertEqual(analysis.market_direction, "neutral")
+        self.assertEqual(
+            tuple(
+                (evidence.commodity_key, evidence.market_direction)
+                for evidence in analysis.commodity_directional_evidence
+            ),
+            (("crude_oil", "bullish"), ("fuel_oil", "bearish")),
+        )
+
+    def test_scoped_direct_fundamentals_preserve_simple_and_agreeing_results(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "single primary",
+                make_research_analysis("原油供应收紧。", "Market context."),
+                ("crude_oil",),
+            ),
+            (
+                "agreeing primary commodities",
+                make_research_analysis(
+                    "原油与燃料油专题",
+                    "原油供应收紧；燃料油供给减少。",
+                ),
+                ("crude_oil", "fuel_oil"),
+            ),
+        )
+
+        for name, analysis, expected_keys in cases:
+            with self.subTest(name=name):
+                global_view = self.aggregator.aggregate([analysis])
+                views = self.aggregator.aggregate_by_commodity([analysis])
+
+                self.assertEqual(analysis.market_direction, "bullish")
+                self.assertEqual(analysis.confidence_score, 75)
+                self.assertEqual(
+                    analysis.directional_provenance,
+                    "direct_fundamental",
+                )
+                self.assertEqual(
+                    tuple(
+                        (evidence.commodity_key, evidence.market_direction)
+                        for evidence in analysis.commodity_directional_evidence
+                    ),
+                    tuple((key, "bullish") for key in expected_keys),
+                )
+                self.assertEqual(global_view.overall_market_direction, "bullish")
+                self.assertEqual(global_view.aggregated_confidence_score, 75)
+                self.assertEqual(
+                    tuple(view.commodity_key for view in views),
+                    expected_keys,
+                )
+                self.assertEqual(
+                    tuple(view.overall_direction for view in views),
+                    ("bullish",) * len(expected_keys),
+                )
+                self.assertEqual(
+                    tuple(view.confidence_score for view in views),
+                    (75,) * len(expected_keys),
+                )
+
+    def test_missing_scoped_evidence_uses_report_direction_without_creating_buckets(
+        self,
+    ) -> None:
+        analysis = make_analysis(
+            "bullish",
+            75,
+            ("Resolved report direction.",),
+            source_type="research_report",
+            title="原油与燃料油专题",
+            content="Market context.",
+            directional_provenance="direct_fundamental",
+            commodity_directional_evidence=(
+                CommodityDirectionalEvidence(
+                    "crude_oil",
+                    "Crude Oil",
+                    "bullish",
+                ),
+            ),
+        )
+
+        views = {
+            view.commodity_key: view
+            for view in self.aggregator.aggregate_by_commodity([analysis])
+        }
+
+        self.assertEqual(tuple(views), ("crude_oil", "fuel_oil"))
+        self.assertEqual(views["crude_oil"].overall_direction, "bullish")
+        self.assertEqual(views["fuel_oil"].overall_direction, "bullish")
+        self.assertEqual(views["fuel_oil"].confidence_score, 75)
+
+        unowned_evidence = make_analysis(
+            "bullish",
+            75,
+            ("Gold report direction.",),
+            source_type="research_report",
+            title="Gold outlook",
+            content="Market context.",
+            directional_provenance="direct_fundamental",
+            commodity_directional_evidence=(
+                CommodityDirectionalEvidence(
+                    "crude_oil",
+                    "Crude Oil",
+                    "bullish",
+                ),
+            ),
+        )
+        unowned_views = self.aggregator.aggregate_by_commodity([unowned_evidence])
+
+        self.assertEqual(
+            tuple(view.commodity_key for view in unowned_views),
+            ("gold",),
+        )
+        self.assertEqual(unowned_views[0].overall_direction, "bullish")
+
+    def test_legacy_cross_abstention_without_scoped_evidence_remains_neutral(
+        self,
+    ) -> None:
+        analysis = make_analysis(
+            "neutral",
+            60,
+            ("Legacy cross-commodity abstention.",),
+            source_type="research_report",
+            title="原油与燃料油专题",
+            content="Market context.",
+            directional_provenance="cross_commodity_abstention",
+        )
+
+        views = self.aggregator.aggregate_by_commodity([analysis])
+
+        self.assertEqual(
+            tuple(view.commodity_key for view in views),
+            ("crude_oil", "fuel_oil"),
+        )
+        self.assertEqual(
+            tuple(view.overall_direction for view in views),
+            ("neutral", "neutral"),
+        )
+        self.assertEqual(tuple(view.confidence_score for view in views), (60, 60))
+
+    def test_scoped_directions_use_existing_weighting_and_confidence_arithmetic(
+        self,
+    ) -> None:
+        cross_report = make_research_analysis(
+            "原油与燃料油专题",
+            "原油供应收紧；燃料油供应宽松。",
+        )
+        direct_crude = make_analysis(
+            "bearish",
+            75,
+            ("Lower-weight bearish Crude Oil report.",),
+            source_type="research_report",
+            reliability_score=1,
+            title="原油专题",
+            content="Market context.",
+            directional_provenance="direct_fundamental",
+            commodity_directional_evidence=(
+                CommodityDirectionalEvidence(
+                    "crude_oil",
+                    "Crude Oil",
+                    "bearish",
+                ),
+            ),
+        )
+        direct_fuel = make_analysis(
+            "bullish",
+            75,
+            ("Lower-weight bullish Fuel Oil report.",),
+            source_type="research_report",
+            reliability_score=1,
+            title="燃料油专题",
+            content="Market context.",
+            directional_provenance="direct_fundamental",
+            commodity_directional_evidence=(
+                CommodityDirectionalEvidence(
+                    "fuel_oil",
+                    "Fuel Oil",
+                    "bullish",
+                ),
+            ),
+        )
+
+        views = {
+            view.commodity_key: view
+            for view in self.aggregator.aggregate_by_commodity(
+                [cross_report, direct_crude, direct_fuel]
+            )
+        }
+
+        self.assertEqual(views["crude_oil"].overall_direction, "bullish")
+        self.assertEqual(views["crude_oil"].confidence_score, 63)
+        self.assertEqual(views["crude_oil"].analysis_count, 2)
+        self.assertEqual(views["fuel_oil"].overall_direction, "bearish")
+        self.assertEqual(views["fuel_oil"].confidence_score, 63)
+        self.assertEqual(views["fuel_oil"].analysis_count, 2)
+
     def test_non_research_grouping_keeps_legacy_matcher_ownership(self) -> None:
         class FalseyResolver:
             def __init__(self) -> None:
@@ -490,6 +750,7 @@ class MarketAnalysisAggregatorTests(unittest.TestCase):
         for name, analysis, expected_provenance in cases:
             with self.subTest(name=name):
                 view = self.aggregator.aggregate([analysis])
+                commodity_views = self.aggregator.aggregate_by_commodity([analysis])
 
                 self.assertEqual(analysis.market_direction, "neutral")
                 self.assertEqual(analysis.confidence_score, 60)
@@ -500,6 +761,11 @@ class MarketAnalysisAggregatorTests(unittest.TestCase):
                 self.assertEqual(view.overall_market_direction, "neutral")
                 self.assertEqual(view.aggregated_confidence_score, 0)
                 self.assertEqual(view.analysis_count, 1)
+                self.assertEqual(len(commodity_views), 1)
+                self.assertEqual(commodity_views[0].commodity_key, "crude_oil")
+                self.assertEqual(commodity_views[0].overall_direction, "neutral")
+                self.assertEqual(commodity_views[0].confidence_score, 0)
+                self.assertEqual(commodity_views[0].analysis_count, 1)
 
     def test_all_non_directional_provenances_keep_membership_with_zero_confidence(
         self,

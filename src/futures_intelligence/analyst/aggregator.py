@@ -345,7 +345,10 @@ def _commodity_contribution(
     if signal is None or signal.priority == 0:
         return _CommodityContribution(
             analysis=analysis,
-            direction=analysis.market_direction,
+            direction=_effective_commodity_direction(
+                analysis,
+                match.commodity_key,
+            ),
             reasoning_details=analysis.reasoning_details,
         )
     return _CommodityContribution(
@@ -358,6 +361,17 @@ def _commodity_contribution(
         )
         + (f"Observed market movement: {signal.evidence}.",),
     )
+
+
+def _effective_commodity_direction(
+    analysis: MarketAnalysis,
+    commodity_key: str,
+) -> str:
+    """Use matching scoped evidence or retain the report-level direction."""
+    for evidence in analysis.commodity_directional_evidence:
+        if evidence.commodity_key == commodity_key:
+            return evidence.market_direction
+    return analysis.market_direction
 
 
 def _aggregate_contributions(
