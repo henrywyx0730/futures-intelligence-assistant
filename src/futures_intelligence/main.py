@@ -400,7 +400,12 @@ def _run_htfc_demo() -> int:
         ranked_information, analyses, _, relevance = _evaluate_htfc_pdf_information(
             collected_information
         )
-        output = format_htfc_demo(ranked_information, analyses, relevance)
+        output = format_htfc_demo(
+            ranked_information,
+            analyses,
+            relevance,
+            report_display_order=collected_information,
+        )
     except (_HuataiSmokeTestFailure, HuataiDemoError) as error:
         print(f"Huatai Futures demo failed: {error}")
         return 1

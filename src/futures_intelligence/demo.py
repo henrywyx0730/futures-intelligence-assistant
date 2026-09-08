@@ -96,9 +96,17 @@ def format_htfc_demo(
     information: list[MarketInformation],
     analyses: list[MarketAnalysis],
     relevance: tuple[CommodityRelevanceAssessment, ...],
+    *,
+    report_display_order: list[MarketInformation] | None = None,
 ) -> str:
     """Aggregate and format an already-evaluated bounded Huatai report batch."""
     _validate_demo_inputs(information, analyses, relevance)
+    report_rows = _report_rows_in_display_order(
+        information,
+        analyses,
+        relevance,
+        report_display_order,
+    )
     aggregator = MarketAnalysisAggregator()
     commodity_views = aggregator.aggregate_by_commodity(analyses)
     global_view = aggregator.aggregate(analyses)
@@ -111,10 +119,7 @@ def format_htfc_demo(
         f"已选华泰报告：{len(information)}",
         DEMO_SAMPLING_DESCRIPTION,
     ]
-    for index, (item, analysis, assessment) in enumerate(
-        zip(information, analyses, relevance),
-        start=1,
-    ):
+    for index, (item, analysis, assessment) in enumerate(report_rows, start=1):
         lines.extend(_format_report(index, item, analysis, assessment))
 
     lines.extend(["", _SECTION_SEPARATOR, "品种视图", _SECTION_SEPARATOR])
@@ -176,6 +181,39 @@ def _validate_demo_inputs(
         raise HuataiDemoError("Huatai demo analysis identity was not preserved.")
 
 
+def _report_rows_in_display_order(
+    information: list[MarketInformation],
+    analyses: list[MarketAnalysis],
+    relevance: tuple[CommodityRelevanceAssessment, ...],
+    report_display_order: list[MarketInformation] | None,
+) -> tuple[
+    tuple[MarketInformation, MarketAnalysis, CommodityRelevanceAssessment], ...
+]:
+    """Align evaluated rows to an optional pre-analysis display order."""
+    rows = tuple(zip(information, analyses, relevance))
+    if report_display_order is None:
+        return rows
+    if not isinstance(report_display_order, list) or not all(
+        isinstance(item, MarketInformation) for item in report_display_order
+    ):
+        raise HuataiDemoError(
+            "Huatai demo report display order must be a MarketInformation list."
+        )
+    display_identities = tuple(map(id, report_display_order))
+    if len(display_identities) != len(set(display_identities)):
+        raise HuataiDemoError(
+            "Huatai demo report display order contains duplicate identities."
+        )
+    rows_by_identity = {id(row[0]): row for row in rows}
+    if len(report_display_order) != len(rows) or set(display_identities) != set(
+        rows_by_identity
+    ):
+        raise HuataiDemoError(
+            "Huatai demo report display order does not match evaluated reports."
+        )
+    return tuple(rows_by_identity[item_id] for item_id in display_identities)
+
+
 def _format_report(
     index: int,
     item: MarketInformation,
@@ -193,7 +231,7 @@ def _format_report(
         f"主要品种：{', '.join(primary_labels) or '未识别到明确 Primary 品种'}",
         f"摘要：{_bounded_text(analysis.summary, MAX_PRESENTATION_CHARACTERS)}",
         f"报告方向：{_direction_label(analysis.market_direction)}",
-        f"方向置信度：{analysis.confidence_score}/100",
+        f"报告分析置信度：{analysis.confidence_score}/100",
         f"判定依据：{analysis.directional_provenance}",
         "品种级方向：",
     ]

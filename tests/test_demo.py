@@ -1,7 +1,7 @@
 """Tests for the bounded, deterministic Huatai presentation command."""
 
 from contextlib import redirect_stdout
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 import unittest
 from unittest.mock import Mock, patch
@@ -50,6 +50,53 @@ def synthetic_demo_reports() -> list[MarketInformation]:
         make_demo_information(
             "原油与燃料油专题",
             "原油供应收紧；燃料油供应宽松。REPORT_BODY_SECRET_CROSS",
+        ),
+    ]
+
+
+def live_like_selected_demo_reports() -> list[MarketInformation]:
+    """Return selected reports whose freshness makes ranking reorder them."""
+    now = datetime.now(timezone.utc)
+
+    def report(
+        title: str,
+        content: str,
+        age_hours: int,
+        url: str,
+    ) -> MarketInformation:
+        return MarketInformation(
+            title=title,
+            source="Huatai Futures",
+            source_type="research_report",
+            published_time=now - timedelta(hours=age_hours),
+            content=content,
+            category=("research",),
+            regions=("China",),
+            reliability_score=5,
+            url=url,
+        )
+
+    return [
+        report(
+            (
+                "华泰期货石油沥青专题20260904：供应端矛盾支撑市场强现实，"
+                "预期仍存变数"
+            ),
+            "石油沥青市场信息。",
+            1,
+            "https://htfc.com/wz_upload/bitumen.pdf",
+        ),
+        report(
+            "华泰期货宏观政策跟踪",
+            "政策信息保持稳定。",
+            0,
+            "https://htfc.com/wz_upload/macro.pdf",
+        ),
+        report(
+            "华泰期货黑色专题报告20260906：成本推升与复产博弈",
+            "行业信息保持稳定。",
+            2,
+            "https://htfc.com/wz_upload/black.pdf",
         ),
     ]
 
@@ -357,6 +404,41 @@ class HuataiDemoTests(unittest.TestCase):
                 (),
             )
 
+    def test_report_display_order_requires_exact_identities_and_keeps_aggregates(
+        self,
+    ) -> None:
+        reports = live_like_selected_demo_reports()
+        ranked, analyses, relevance = evaluate_demo_reports(reports)
+        ranked_output = format_htfc_demo(ranked, analyses, relevance)
+        selected_output = format_htfc_demo(
+            ranked,
+            analyses,
+            relevance,
+            report_display_order=reports,
+        )
+        aggregate_marker = f"\n{'-' * 60}\n品种视图\n"
+
+        self.assertNotEqual(ranked, reports)
+        self.assertEqual(
+            ranked_output.partition(aggregate_marker)[2],
+            selected_output.partition(aggregate_marker)[2],
+        )
+
+        foreign_report = make_demo_information("石油沥青专题", "石油沥青市场信息。")
+        for display_order, expected in (
+            ([reports[0], reports[0], reports[2]], "duplicate identities"),
+            (reports[:2], "does not match evaluated reports"),
+            ([reports[0], reports[1], foreign_report], "does not match evaluated reports"),
+        ):
+            with self.subTest(expected=expected):
+                with self.assertRaisesRegex(HuataiDemoError, expected):
+                    format_htfc_demo(
+                        ranked,
+                        analyses,
+                        relevance,
+                        report_display_order=display_order,
+                    )
+
     def test_command_reuses_bounded_collection_and_has_no_pipeline_side_effects(
         self,
     ) -> None:
@@ -399,6 +481,56 @@ class HuataiDemoTests(unittest.TestCase):
         openai_client_factory.assert_not_called()
         service.assert_not_called()
         self.assertIn("Demo 完成：已分析 3 篇报告", output.getvalue())
+
+    def test_command_preserves_selected_report_order_and_distinguishes_confidence(
+        self,
+    ) -> None:
+        import futures_intelligence.main as main_module
+
+        runner = getattr(main_module, "_run_htfc_demo", None)
+        self.assertTrue(callable(runner))
+        reports = live_like_selected_demo_reports()
+        output = StringIO()
+
+        with (
+            patch(
+                "futures_intelligence.main._collect_commodity_focused_htfc_demo_information",
+                return_value=reports,
+            ),
+            redirect_stdout(output),
+        ):
+            exit_code = runner()
+
+        self.assertEqual(exit_code, 0)
+        rendered = output.getvalue()
+        title_lines = [
+            line.removeprefix("标题：")
+            for line in rendered.splitlines()
+            if line.startswith("标题：")
+        ]
+        self.assertEqual(title_lines, [report.title for report in reports])
+        self.assertIn(
+            "主要品种：Bitumen\n"
+            "摘要：Detected commodity focus: Bitumen. Review potential supply, "
+            "demand, inventory, and cost implications.\n"
+            "报告方向：中性 (neutral)\n"
+            "报告分析置信度：80/100\n"
+            "判定依据：no_directional_signal",
+            rendered,
+        )
+        self.assertIn(
+            "Bitumen\n"
+            "方向：中性 (neutral)\n"
+            "聚合方向置信度：0/100\n"
+            "报告数：1",
+            rendered,
+        )
+        self.assertFalse(
+            any(
+                line.startswith("方向置信度：")
+                for line in rendered.splitlines()
+            )
+        )
 
     def test_command_reports_expected_failures_and_propagates_unexpected_errors(
         self,
