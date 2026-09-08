@@ -177,6 +177,46 @@ class CommodityRelevanceTests(unittest.TestCase):
             tuple(item.commodity_key for item in content_assessment.mentioned), ("silver",)
         )
 
+    def test_bitumen_title_is_primary_and_body_only_evidence_is_mentioned(self) -> None:
+        resolver = CommodityRelevanceResolver()
+        live_title = (
+            "华泰期货石油沥青专题20260904：供应端矛盾支撑市场强现实，"
+            "预期仍存变数——结合华南沥青调研情况分析"
+        )
+
+        live_assessment = resolver.assess(
+            make_information(live_title, "General market context.")
+        )
+        title_assessment = resolver.assess(
+            make_information("石油沥青专题", "General market context.")
+        )
+        content_assessment = resolver.assess(
+            make_information("宏观政策观察", "石油沥青库存受到关注。")
+        )
+
+        for label, assessment in (
+            ("live title", live_assessment),
+            ("short title", title_assessment),
+        ):
+            with self.subTest(label=label):
+                self.assertEqual(
+                    tuple(item.commodity_key for item in assessment.primary),
+                    ("bitumen",),
+                )
+                self.assertEqual(assessment.primary[0].commodity_label, "Bitumen")
+                self.assertEqual(assessment.primary[0].role, "primary")
+                self.assertEqual(assessment.primary[0].reasons, (PRIMARY_REASON,))
+                self.assertEqual(assessment.mentioned, ())
+
+        self.assertEqual(content_assessment.primary, ())
+        self.assertEqual(
+            tuple(item.commodity_key for item in content_assessment.mentioned),
+            ("bitumen",),
+        )
+        self.assertEqual(content_assessment.mentioned[0].commodity_label, "Bitumen")
+        self.assertEqual(content_assessment.mentioned[0].role, "mentioned")
+        self.assertEqual(content_assessment.mentioned[0].reasons, (MENTIONED_REASON,))
+
     def test_copper_title_topic_evidence_is_primary_while_body_only_is_mentioned(self) -> None:
         resolver = CommodityRelevanceResolver()
 

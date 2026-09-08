@@ -22,6 +22,11 @@ commodities:
       - low-sulfur fuel oil
       - 低硫燃料油
       - 低硫燃油
+  bitumen:
+    label: Bitumen
+    aliases:
+      - bitumen
+      - 石油沥青
   butadiene_rubber:
     label: Butadiene Rubber
     aliases:

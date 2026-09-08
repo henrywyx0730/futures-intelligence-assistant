@@ -91,6 +91,69 @@ class CommodityMatcherTests(unittest.TestCase):
                 )
                 self.assertEqual(actual_keys, expected_keys)
 
+    def test_matches_conservative_bitumen_identities_with_source_spans(self) -> None:
+        live_title = (
+            "华泰期货石油沥青专题20260904：供应端矛盾支撑市场强现实，"
+            "预期仍存变数——结合华南沥青调研情况分析"
+        )
+        low_sulfur_position = self.matcher.commodity_order.index(
+            "low_sulfur_fuel_oil"
+        )
+        evidence = self.matcher.match_with_evidence(
+            make_information(live_title, "Details.")
+        )
+
+        self.assertEqual(
+            self.matcher.commodity_order[
+                low_sulfur_position : low_sulfur_position + 2
+            ],
+            ("low_sulfur_fuel_oil", "bitumen"),
+        )
+        self.assertEqual(
+            tuple(
+                (match.commodity_key, match.commodity_label, match.matched_aliases)
+                for match in evidence.matches
+            ),
+            (("bitumen", "Bitumen", ("石油沥青",)),),
+        )
+        self.assertEqual(len(evidence.occurrences), 1)
+        occurrence = evidence.occurrences[0]
+        self.assertEqual(
+            (occurrence.commodity_key, occurrence.commodity_label),
+            ("bitumen", "Bitumen"),
+        )
+        self.assertEqual((occurrence.field, occurrence.alias), ("title", "石油沥青"))
+        self.assertEqual(
+            live_title[occurrence.start : occurrence.end],
+            "石油沥青",
+        )
+
+    def test_matches_english_bitumen_identity(self) -> None:
+        matches = self.matcher.match(
+            make_information("Bitumen market outlook", "Details.")
+        )
+
+        self.assertEqual(
+            tuple(
+                (match.commodity_key, match.commodity_label, match.matched_aliases)
+                for match in matches
+            ),
+            (("bitumen", "Bitumen", ("bitumen",)),),
+        )
+
+    def test_does_not_expand_bitumen_to_generic_asphalt_material_language(self) -> None:
+        for title in ("沥青混凝土行业研究", "道路沥青材料专题"):
+            with self.subTest(title=title):
+                self.assertNotIn(
+                    "bitumen",
+                    tuple(
+                        match.commodity_key
+                        for match in self.matcher.match(
+                            make_information(title, "Details.")
+                        )
+                    ),
+                )
+
     def test_matches_silver_chinese_identity_and_excludes_color_context(self) -> None:
         positive_cases = (
             ("白银期货动态跨期套利策略研究", "Details."),

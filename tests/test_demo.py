@@ -268,6 +268,33 @@ class HuataiDemoTests(unittest.TestCase):
         self.assertEqual(selected, (relevant, items[0], items[2]))
         self.assertEqual(len({item.canonical_url for item in selected}), 3)
 
+    def test_selection_prioritizes_live_bitumen_title_before_broader_fallbacks(self) -> None:
+        selector = getattr(demo_module, "select_htfc_demo_pdf_items", None)
+        self.assertTrue(callable(selector))
+        bitumen = make_listing_item(
+            3,
+            (
+                "华泰期货石油沥青专题20260904：供应端矛盾支撑市场强现实，"
+                "预期仍存变数——结合华南沥青调研情况分析"
+            ),
+        )
+        items = (
+            make_listing_item(0, "华泰期货宏观政策跟踪"),
+            make_listing_item(
+                1,
+                "华泰期货黑色专题报告20260906：成本推升与复产博弈，"
+                "关注煤炭价格对成本影响",
+            ),
+            make_listing_item(2, "华泰期货美国就业数据跟踪"),
+            bitumen,
+            make_listing_item(4, "华泰期货国债专题报告"),
+            make_listing_item(5, "华泰期货化工行业观察"),
+        )
+
+        selected = selector(items)
+
+        self.assertEqual(selected, (bitumen, items[0], items[1]))
+
     def test_selection_falls_back_to_first_three_when_no_title_is_relevant(self) -> None:
         selector = getattr(demo_module, "select_htfc_demo_pdf_items", None)
         self.assertTrue(callable(selector))
