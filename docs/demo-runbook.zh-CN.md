@@ -40,6 +40,8 @@ test -x .venv/bin/python3
 
 演示前的正常状态是：`git status --short` 没有输出，分支为 `main`，虚拟环境检查成功。不必把 `curl` 之类的网络探测作为必选步骤；真正有意义的实时检查就是 Demo 命令本身。
 
+面向不熟悉命令行的演示场景，也可以用 `PYTHONPATH=src .venv/bin/python3 -m futures_intelligence.gui` 打开轻量桌面启动器，再点击**运行 Demo**。它运行的是同一条有边界的流程。下方命令行路径仍是可信的现场备用和排查方式。
+
 ## 3–5 分钟主流程
 
 | 时间 | 操作 | 希望观众理解什么 |

@@ -70,6 +70,10 @@ class _HuataiSmokeTestFailure(RuntimeError):
     """A bounded failure deliberately detected by a Huatai smoke command."""
 
 
+class HtfcDemoRunError(RuntimeError):
+    """A concise, user-displayable failure from the bounded Huatai demo."""
+
+
 def main(argv: list[str] | None = None) -> int:
     """Parse a command and run its CLI presentation handler."""
     arguments = _parse_arguments(argv)
@@ -371,30 +375,36 @@ def _run_htfc_pdf_analysis_evaluation() -> int:
 
 
 def _run_htfc_demo() -> int:
-    """Run the bounded Huatai collection path and print a deterministic demo."""
+    """Print the shared bounded Huatai demo with the existing CLI failure contract."""
+    try:
+        output = run_htfc_demo()
+    except HtfcDemoRunError as error:
+        print(f"Huatai Futures demo failed: {error}")
+        return 1
+
+    print(output)
+    return 0
+
+
+def run_htfc_demo() -> str:
+    """Run the bounded deterministic Huatai demo and return formatted output."""
     try:
         collected_information = _collect_commodity_focused_htfc_demo_information(
             HTFC_PDF_ANALYSIS_EVALUATION_LIMIT
         )
     except OSError as error:
-        print(f"Huatai Futures demo failed: {_htfc_error_message(error)}")
-        return 1
-    except HuataiListingStructureError:
-        print(
-            "Huatai Futures demo failed: "
+        raise HtfcDemoRunError(_htfc_error_message(error)) from error
+    except HuataiListingStructureError as error:
+        raise HtfcDemoRunError(
             "Huatai Futures report listing structure was not recognized."
-        )
-        return 1
+        ) from error
     except _HuataiSmokeTestFailure as error:
-        print(f"Huatai Futures demo failed: {error}")
-        return 1
+        raise HtfcDemoRunError(str(error)) from error
 
     if not collected_information:
-        print(
-            "Huatai Futures demo failed: no Huatai research reports were "
-            "available for the bounded demo."
+        raise HtfcDemoRunError(
+            "no Huatai research reports were available for the bounded demo."
         )
-        return 1
 
     try:
         ranked_information, analyses, _, relevance = _evaluate_htfc_pdf_information(
@@ -407,11 +417,9 @@ def _run_htfc_demo() -> int:
             report_display_order=collected_information,
         )
     except (_HuataiSmokeTestFailure, HuataiDemoError) as error:
-        print(f"Huatai Futures demo failed: {error}")
-        return 1
+        raise HtfcDemoRunError(str(error)) from error
 
-    print(output)
-    return 0
+    return output
 
 
 def _collect_commodity_focused_htfc_demo_information(

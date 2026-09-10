@@ -18,6 +18,16 @@ PYTHONPATH=src .venv/bin/python3 -m futures_intelligence.main htfc-demo
 
 Demo 最多处理 3 篇华泰期货研报，并全程使用确定性分析路径。它需要访问华泰期货官网，但不需要 OpenAI、API Key 或数据库。
 
+### 桌面启动器
+
+如果希望用简单的桌面窗口演示，可以在仓库根目录运行：
+
+```sh
+PYTHONPATH=src .venv/bin/python3 -m futures_intelligence.gui
+```
+
+打开后点击**运行 Demo**。桌面启动器需要访问华泰期货实时来源，但不需要 OpenAI API Key 或数据库；它与 `htfc-demo` 共用同一条确定性编排路径。命令行仍是排查问题和现场备用方式。在发布打包版本之前，本地 Python 需要包含 Tk 支持。
+
 ## 为什么做这个项目
 
 期货研究员每天早晨往往要面对大量隔夜研报、公告、数据发布和市场更新。在真正开始判断之前，需要反复打开文件、识别相关合约、区分直接证据和背景提及，再按品种整理材料。

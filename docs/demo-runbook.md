@@ -40,6 +40,8 @@ test -x .venv/bin/python3
 
 Expected state before the demo: `git status --short` prints nothing, the branch is `main`, and the virtual-environment check succeeds. A separate network probe is optional; the demo command itself is the meaningful live check.
 
+For a non-technical desktop presentation, you can instead open the thin GUI launcher with `PYTHONPATH=src .venv/bin/python3 -m futures_intelligence.gui` and click **运行 Demo**. It runs the same bounded pipeline. Keep the CLI below as the trusted fallback and debugging route.
+
 ## 3–5 minute main demo
 
 | Time | Operator action | Audience takeaway |

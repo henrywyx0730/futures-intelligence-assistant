@@ -18,6 +18,16 @@ PYTHONPATH=src .venv/bin/python3 -m futures_intelligence.main htfc-demo
 
 The demo processes at most three Huatai Futures reports through the deterministic path. It requires live access to the official Huatai site, but it does not require OpenAI, an API key, or a database.
 
+### Desktop launcher
+
+For a simple desktop view, launch the same bounded demo from the repository root:
+
+```sh
+PYTHONPATH=src .venv/bin/python3 -m futures_intelligence.gui
+```
+
+Click **运行 Demo** to start. The launcher requires live Huatai access, but no OpenAI API key or database; it calls the same deterministic orchestration as `htfc-demo`. The command-line route remains the troubleshooting and fallback path. A Python installation with Tk support is required until packaged desktop builds are provided.
+
 ## Why this project exists
 
 Futures researchers often begin the day with a large set of overnight reports, notices, data releases, and market updates. Before analysis can begin, someone must repeatedly open documents, identify the relevant contracts, separate direct evidence from background mentions, and organize the material by commodity.

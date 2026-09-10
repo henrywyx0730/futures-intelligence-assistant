@@ -482,6 +482,47 @@ class HuataiDemoTests(unittest.TestCase):
         service.assert_not_called()
         self.assertIn("Demo 完成：已分析 3 篇报告", output.getvalue())
 
+    def test_shared_orchestration_returns_the_existing_formatted_output(self) -> None:
+        import futures_intelligence.main as main_module
+
+        shared_runner = getattr(main_module, "run_htfc_demo", None)
+        self.assertTrue(callable(shared_runner))
+        reports = live_like_selected_demo_reports()
+        ranked, analyses, relevance = evaluate_demo_reports(reports)
+        expected = format_htfc_demo(
+            ranked,
+            analyses,
+            relevance,
+            report_display_order=reports,
+        )
+
+        with patch(
+            "futures_intelligence.main._collect_commodity_focused_htfc_demo_information",
+            return_value=reports,
+        ) as collect:
+            result = shared_runner()
+
+        collect.assert_called_once_with(3)
+        self.assertEqual(result, expected)
+
+    def test_cli_prints_the_shared_orchestration_result_unchanged(self) -> None:
+        import futures_intelligence.main as main_module
+
+        output = StringIO()
+        with (
+            patch.object(
+                main_module,
+                "run_htfc_demo",
+                return_value="formatted demo output",
+            ) as shared_runner,
+            redirect_stdout(output),
+        ):
+            exit_code = main_module._run_htfc_demo()
+
+        self.assertEqual(exit_code, 0)
+        shared_runner.assert_called_once_with()
+        self.assertEqual(output.getvalue(), "formatted demo output\n")
+
     def test_command_preserves_selected_report_order_and_distinguishes_confidence(
         self,
     ) -> None:
